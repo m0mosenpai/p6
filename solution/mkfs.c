@@ -70,7 +70,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (raid < 0 || inodes <= 0 || blocks <= 0 || dcnt < 2) {
-        return -1;
+        return 1;
     }
 
     // round up blocks to multiple of 32
