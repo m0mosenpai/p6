@@ -73,6 +73,9 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
+    // round up inodes to multiple of 32
+    inodes = roundup(inodes, 32);
+
     // round up blocks to multiple of 32
     blocks = roundup(blocks, 32);
 
