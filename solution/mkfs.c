@@ -75,13 +75,8 @@ int main(int argc, char *argv[]) {
 
     // round up blocks to multiple of 32
     blocks = roundup(blocks, 32);
-    /*if (blocks % 32 != 0) {*/
-    /*    blocks = blocks + 32 - (blocks % 32);*/
-    /*}*/
 
     int inodesize, dblocksize;
-    /*int niblocks, ndblocks;*/
-    /*int ibmapsize, dbmapsize;*/
 
     for (i = 0; i < dcnt; i++) {
         FILE *disk = fopen(disks[i], "wb");
@@ -89,42 +84,16 @@ int main(int argc, char *argv[]) {
             return -1;
         }
 
-        inodesize = inodes / 8;
-        /*niblocks = inodesize / BLOCK_SIZE + 1;*/
-        /*ibmapsize = niblocks * BLOCK_SIZE;*/
-        dblocksize = blocks / 8;
-        /*ndblocks = dblocksize / BLOCK_SIZE + 1;*/
-        /*dbmapsize = ndblocks * BLOCK_SIZE;*/
-
-        // init superblock
-        struct wfs_sb superblock = {
-            .num_inodes = inodes,
-            .num_data_blocks = blocks,
-            .i_bitmap_ptr = BLOCK_SIZE,
-            .d_bitmap_ptr = superblock.i_bitmap_ptr + inodesize,
-            .i_blocks_ptr = roundup(superblock.d_bitmap_ptr + dblocksize, BLOCK_SIZE),
-            .d_blocks_ptr = superblock.i_blocks_ptr + inodes*BLOCK_SIZE,
-        };
-        if (fwrite(&superblock, BLOCK_SIZE, 1, disk) != 1) {
-            return -1;
-        }
-
         // init inode bitmap & set root inode
+        inodesize = roundup(inodes, 8) / 8;
         unsigned char inodebitmap[inodesize];
         memset(inodebitmap, 0, inodesize);
         inodebitmap[0] = 1;
-        /*if (fwrite(&inodebitmap, ibmapsize, 1, disk) != 1) {*/
-        if (fwrite(&inodebitmap, sizeof(inodebitmap), 1, disk) != 1) {
-            return -1;
-        }
 
         // init data bitmap
+        dblocksize = roundup(blocks, 8) / 8;
         unsigned char dbitmap[dblocksize];
         memset(dbitmap, 0, dblocksize);
-        /*if (fwrite(&dbitmap, dbmapsize, 1, disk) != 1) {*/
-        if (fwrite(&dbitmap, sizeof(dbitmap), 1, disk) != 1) {
-            return -1;
-        }
 
         // init root inode
         time_t ctime;
@@ -141,14 +110,36 @@ int main(int argc, char *argv[]) {
             .ctim = ctime,
         };
         memset(root.blocks, 0, N_BLOCKS*(sizeof(off_t)));
-        off_t fpos = roundup(ftell(disk), BLOCK_SIZE);
-        fseek(disk, fpos, SEEK_CUR);
+
+        // init superblock
+        struct wfs_sb superblock = {
+            .num_inodes = inodes,
+            .num_data_blocks = blocks,
+            .i_bitmap_ptr = sizeof(struct wfs_sb),
+            .d_bitmap_ptr = superblock.i_bitmap_ptr + sizeof(inodebitmap),
+            .i_blocks_ptr = roundup(superblock.d_bitmap_ptr + sizeof(dblocksize), BLOCK_SIZE),
+            .d_blocks_ptr = superblock.i_blocks_ptr + inodes*BLOCK_SIZE,
+        };
+        if (fwrite(&superblock, sizeof(struct wfs_sb), 1, disk) != 1) {
+            return -1;
+        }
+
+        fseek(disk, superblock.i_bitmap_ptr, SEEK_SET);
+        if (fwrite(&inodebitmap, sizeof(inodebitmap), 1, disk) != 1) {
+            return -1;
+        }
+
+        fseek(disk, superblock.d_bitmap_ptr, SEEK_SET);
+        if (fwrite(&dbitmap, sizeof(dbitmap), 1, disk) != 1) {
+            return -1;
+        }
+
+        fseek(disk, superblock.i_blocks_ptr, SEEK_SET);
         if (fwrite(&root, BLOCK_SIZE, 1, disk) != 1) {
             return -1;
         }
         fclose(disk);
     }
-    /*printf("successfully written!\n");*/
 
     return 0;
 }
