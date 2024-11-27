@@ -36,7 +36,7 @@ int main(int argc, char *argv[]) {
             str = argv[i + 1];
             raid = strtol(str, &endptr, 10);
             if (errno != 0 || *endptr != '\0' || (raid < 0 || raid > 1)) {
-                return 1;
+                return -1;
             }
         }
         else if (strcmp(argv[i], "-d") == 0) {
@@ -53,18 +53,18 @@ int main(int argc, char *argv[]) {
             str = argv[i + 1];
             inodes = strtol(str, &endptr, 10);
             if (errno != 0 || endptr == str || *endptr != '\0' || inodes <= 0) {
-                return 1;
+                return -1;
             }
         }
         else if (strcmp(argv[i], "-b") == 0) {
             str = argv[i + 1];
             blocks = strtol(str, &endptr, 10);
             if (errno != 0 || endptr == str || *endptr != '\0' || blocks <= 0) {
-                return 1;
+                return -1;
             }
         }
         else {
-            return 1;
+            return -1;
         }
         i += 1;
     }
