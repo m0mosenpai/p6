@@ -1,4 +1,4 @@
-python -c 'import os
+python3 -c 'import os
 from stat import *
 
 try:
