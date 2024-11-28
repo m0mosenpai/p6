@@ -9,6 +9,12 @@
 
 #define MIN_DISKS 2
 
+void freev(void **ptr, int len, int free_seg) {
+    if (len < 0) while (*ptr) { free(*ptr); *ptr++ = NULL; }
+    else { for (int i = 0; i < len; i++) free(ptr[i]); }
+    if (free_seg) free(ptr);
+}
+
 int roundup(int n, int k) {
     int r = n % k;
     if (r == 0) return n;
@@ -24,7 +30,7 @@ int main(int argc, char *argv[]) {
     long raid = -1;
     long inodes = -1;
     long blocks = -1;
-    char **disks = malloc(MIN_DISKS * sizeof(char*));
+    char **disks = calloc(MIN_DISKS, sizeof(char*));
     int ndisks = MIN_DISKS;
     int dcnt = 0;
     char *endptr, *str;
@@ -36,6 +42,7 @@ int main(int argc, char *argv[]) {
             str = argv[i + 1];
             raid = strtol(str, &endptr, 10);
             if (errno != 0 || *endptr != '\0' || (raid < 0 || raid > 1)) {
+                freev((void*)disks, ndisks, 1);
                 return 1;
             }
         }
@@ -53,6 +60,7 @@ int main(int argc, char *argv[]) {
             str = argv[i + 1];
             inodes = strtol(str, &endptr, 10);
             if (errno != 0 || endptr == str || *endptr != '\0' || inodes <= 0) {
+                freev((void*)disks, ndisks, 1);
                 return 1;
             }
         }
@@ -60,16 +68,19 @@ int main(int argc, char *argv[]) {
             str = argv[i + 1];
             blocks = strtol(str, &endptr, 10);
             if (errno != 0 || endptr == str || *endptr != '\0' || blocks <= 0) {
+                freev((void*)disks, ndisks, 1);
                 return 1;
             }
         }
         else {
+            freev((void*)disks, ndisks, 1);
             return 1;
         }
         i += 1;
     }
 
     if (raid < 0 || inodes <= 0 || blocks <= 0 || dcnt < 2) {
+        freev((void*)disks, ndisks, 1);
         return 1;
     }
 
@@ -83,6 +94,7 @@ int main(int argc, char *argv[]) {
     for (i = 0; i < dcnt; i++) {
         FILE *disk = fopen(disks[i], "r+b");
         if (disk == NULL) {
+            freev((void*)disks, ndisks, 1);
             return -1;
         }
 
@@ -127,34 +139,46 @@ int main(int argc, char *argv[]) {
         req_totalsize = sizeof(struct wfs_sb) + sizeof(inodebitmap) + sizeof(dbitmap) + inodes*BLOCK_SIZE + blocks*BLOCK_SIZE;
         fseek(disk, 0, SEEK_END);
         if (ftell(disk) < req_totalsize) {
+            fclose(disk);
+            freev((void*)disks, ndisks, 1);
             return -1;
         }
         fseek(disk, 0, SEEK_SET);
 
         // superblock
         if (fwrite(&superblock, sizeof(struct wfs_sb), 1, disk) != 1) {
+            fclose(disk);
+            freev((void*)disks, ndisks, 1);
             return -1;
         }
 
         // inode bitmap
         fseek(disk, superblock.i_bitmap_ptr, SEEK_SET);
         if (fwrite(&inodebitmap, sizeof(inodebitmap), 1, disk) != 1) {
+            fclose(disk);
+            freev((void*)disks, ndisks, 1);
             return -1;
         }
 
         // data bitmap
         fseek(disk, superblock.d_bitmap_ptr, SEEK_SET);
         if (fwrite(&dbitmap, sizeof(dbitmap), 1, disk) != 1) {
+            fclose(disk);
+            freev((void*)disks, ndisks, 1);
             return -1;
         }
 
         // root inode
         fseek(disk, superblock.i_blocks_ptr, SEEK_SET);
         if (fwrite(&root, BLOCK_SIZE, 1, disk) != 1) {
+            fclose(disk);
+            freev((void*)disks, ndisks, 1);
             return -1;
         }
+
         fclose(disk);
     }
 
+    freev((void*)disks, ndisks, 1);
     return 0;
 }
