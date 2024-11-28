@@ -36,7 +36,7 @@ int main(int argc, char *argv[]) {
             str = argv[i + 1];
             raid = strtol(str, &endptr, 10);
             if (errno != 0 || *endptr != '\0' || (raid < 0 || raid > 1)) {
-                return -1;
+                return 1;
             }
         }
         else if (strcmp(argv[i], "-d") == 0) {
@@ -53,36 +53,35 @@ int main(int argc, char *argv[]) {
             str = argv[i + 1];
             inodes = strtol(str, &endptr, 10);
             if (errno != 0 || endptr == str || *endptr != '\0' || inodes <= 0) {
-                return -1;
+                return 1;
             }
         }
         else if (strcmp(argv[i], "-b") == 0) {
             str = argv[i + 1];
             blocks = strtol(str, &endptr, 10);
             if (errno != 0 || endptr == str || *endptr != '\0' || blocks <= 0) {
-                return -1;
+                return 1;
             }
         }
         else {
-            return -1;
+            return 1;
         }
         i += 1;
     }
 
     if (raid < 0 || inodes <= 0 || blocks <= 0 || dcnt < 2) {
-        return -1;
+        return 1;
     }
 
-    // round up inodes to multiple of 32
+    // round up inodes and blocks to multiple of 32
     inodes = roundup(inodes, 32);
-
-    // round up blocks to multiple of 32
     blocks = roundup(blocks, 32);
 
     int inodesize, dblocksize;
+    ssize_t req_totalsize;
 
     for (i = 0; i < dcnt; i++) {
-        FILE *disk = fopen(disks[i], "wb");
+        FILE *disk = fopen(disks[i], "r+b");
         if (disk == NULL) {
             return -1;
         }
@@ -122,21 +121,34 @@ int main(int argc, char *argv[]) {
             .d_bitmap_ptr = superblock.i_bitmap_ptr + sizeof(inodebitmap),
             .i_blocks_ptr = roundup(superblock.d_bitmap_ptr + sizeof(dblocksize), BLOCK_SIZE),
             .d_blocks_ptr = superblock.i_blocks_ptr + inodes*BLOCK_SIZE,
+            .raid = raid
         };
+
+        req_totalsize = sizeof(struct wfs_sb) + sizeof(inodebitmap) + sizeof(dbitmap) + inodes*BLOCK_SIZE + blocks*BLOCK_SIZE;
+        fseek(disk, 0, SEEK_END);
+        if (ftell(disk) < req_totalsize) {
+            return -1;
+        }
+        fseek(disk, 0, SEEK_SET);
+
+        // superblock
         if (fwrite(&superblock, sizeof(struct wfs_sb), 1, disk) != 1) {
             return -1;
         }
 
+        // inode bitmap
         fseek(disk, superblock.i_bitmap_ptr, SEEK_SET);
         if (fwrite(&inodebitmap, sizeof(inodebitmap), 1, disk) != 1) {
             return -1;
         }
 
+        // data bitmap
         fseek(disk, superblock.d_bitmap_ptr, SEEK_SET);
         if (fwrite(&dbitmap, sizeof(dbitmap), 1, disk) != 1) {
             return -1;
         }
 
+        // root inode
         fseek(disk, superblock.i_blocks_ptr, SEEK_SET);
         if (fwrite(&root, BLOCK_SIZE, 1, disk) != 1) {
             return -1;
