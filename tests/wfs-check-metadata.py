@@ -40,6 +40,22 @@ def is_allocated_inode(disk, inodep, inode):
     for field in ['mode', 'uid', 'gid', 'atim', 'mtim', 'ctim', 'nlinks']:
         test_nonzero(f"inode field {field} [{disk}]", inode[field])
 
+def verify_inodes(inode_list, filesystem):
+    """Verify inodes in a filesystem and return the number of dirs and files."""
+    dirs = 0
+    files = 0
+    for inodep in inode_list:
+        inode = filesystem.read_inode(inodep)
+        is_allocated_inode(filesystem.diskname(), inodep, inode)
+        if S_ISDIR(inode['mode']):
+            dirs += 1
+        elif S_ISREG(inode['mode']):
+            files += 1
+        else:
+            print("Unexpected inode mode")
+            exit(1)
+    return (dirs, files)
+
 def verify_initial_fs_state(disk, inodes, blocks):
     """Verify empty filesystem after running mkfs. Ignore raid in superblock."""
     wfs = wfsverify.WfsState(disk)
@@ -84,34 +100,23 @@ def verify_mkfs(disks, inodes, blocks):
 def verify_raid1(disks, expected_dirs, expected_files, expected_blocks):
     """Verify wfs formatted as raid1."""
     filesystems = [wfsverify.WfsState(disk) for disk in disks]
-    all_blocks = [(filesystem.list_allocated_inodes(), filesystem.list_allocated_datablocks(), filesystem)
+    all_blocks = [(filesystem.list_allocated_inodes(),
+                   filesystem.list_allocated_datablocks(), filesystem)
                   for filesystem in filesystems]
 
     # check each filesystem has the same number of allocated inodes and datablocks
     for (inode_list, datablock_list, fs) in all_blocks:
-        test_eq(f"allocated inodes on {fs.diskname()}", len(inode_list), (expected_files + expected_dirs))
-        test_eq(f"allocated datablocks on {fs.diskname()}", len(datablock_list), expected_blocks)
+        test_eq(f"allocated inodes on {fs.diskname()}",
+                len(inode_list), (expected_files + expected_dirs))
+        test_eq(f"allocated datablocks on {fs.diskname()}",
+                len(datablock_list), expected_blocks)
 
     # ensure inode allocations match their bitmap position on each disk
     inode_lists = [(inode_list, fs) for (inode_list, datablock_list, fs) in all_blocks]
 
     # verify inodes on first disk
     (inode_list, ref_fs) = inode_lists[0]
-    dirs = 0
-    files = 0
-    for inodep in inode_list:
-        inode = ref_fs.read_inode(inodep)
-        is_allocated_inode(ref_fs.diskname(), inodep, inode)
-        if S_ISDIR(inode['mode']):
-            dirs = dirs + 1
-        elif S_ISREG(inode['mode']):
-            files = files + 1
-        else:
-            print("Unexpected inode mode")
-            exit(1)
-
-    test_eq(f"wfs directory inodes", dirs, expected_dirs)
-    test_eq(f"wfs regular file inodes", files, expected_files)
+    (dirs, files) = verify_inodes(inode_list, ref_fs)
 
     # compare inode regions on all disks
     ref_region = ref_fs.read_inode_region()
@@ -129,6 +134,45 @@ def verify_raid1(disks, expected_dirs, expected_files, expected_blocks):
             print(f"raid1 datablock regions must be identical {ref_fs.diskname()} {fs.diskname()}")
             exit(1)
 
+    print("Correct")
+
+def verify_raid0(disks, expected_dirs, expected_files, expected_blocks):
+    """Verify wfs formatted as raid1."""
+    filesystems = [wfsverify.WfsState(disk) for disk in disks]
+    all_blocks = [(filesystem.list_allocated_inodes(),
+                   filesystem.list_allocated_datablocks(), filesystem)
+                  for filesystem in filesystems]
+
+    # check each filesystem has the same number of allocated inodes and datablocks
+    total_datablocks = 0
+    for (inode_list, datablock_list, fs) in all_blocks:
+        test_eq(f"allocated inodes on {fs.diskname()}",
+                len(inode_list), (expected_files + expected_dirs))
+        total_datablocks += len(datablock_list)
+
+    test_eq("total allocated datablocks on all disks",
+            total_datablocks, expected_blocks)
+
+    # ensure inode allocations match their bitmap position on each disk
+    inode_lists = [(inode_list, fs) for (inode_list, datablock_list, fs) in all_blocks]
+
+    # verify inodes on first disk
+    (inode_list, ref_fs) = inode_lists[0]
+    (dirs, files) = verify_inodes(inode_list, ref_fs)
+
+    test_eq(f"wfs directory inodes", dirs, expected_dirs)
+    test_eq(f"wfs regular file inodes", files, expected_files)
+
+    # compare inode regions on all disks
+    ref_region = ref_fs.read_inode_region()
+    for (_, fs) in inode_lists[1:]:
+        comp_region = fs.read_inode_region()
+        if ref_region != comp_region:
+            print(f"raid1 inode regions must be identical {ref_fs.diskname()} {fs.diskname()}")
+            exit(1)
+
+    # TODO verify allocated data blocks are non-zero on each disk
+    # not a big deal though
     print("Correct")
 
 def unimplemented(mode):
@@ -150,5 +194,7 @@ if __name__ == '__main__':
         verify_mkfs(args.disks, int(args.inodes), int(args.blocks))
     elif args.mode == 'raid1':
         verify_raid1(args.disks, int(args.dirs), int(args.files), int(args.blocks))
+    elif args.mode == 'raid0':
+        verify_raid0(args.disks, int(args.dirs), int(args.files), int(args.blocks))
     else:
         unimplemented(args.mode)
