@@ -1,1 +1,1 @@
-mknod: large dir
+raid1 -- write: many small files

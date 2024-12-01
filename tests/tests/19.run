@@ -7,8 +7,7 @@ except Exception as e:
     print(e)
     exit(1)
 with open("file1", "wb") as f:
-    f.write(b'\''a'\'' * 300)
-os.stat("file1").st_size
+    f.write(b'\''a'\'' * 8192)
 
 try:
     S_ISREG(os.stat("file1").st_mode)
@@ -17,4 +16,4 @@ except Exception as e:
     exit(1)
 
 print("Correct")' \
- && ./wfs-check-metadata.py --mode raid1 --blocks 2 --dirs 1 --files 1 --disks test-disk1 test-disk2
+ && ./wfs-check-metadata.py --mode raid1 --blocks 18 --altblocks 19 --dirs 1 --files 1 --disks test-disk1 test-disk2

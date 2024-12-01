@@ -34,6 +34,6 @@ for name in filelist:
             print(f"{name} readback does not match data written")
             exit(1)
             
-print("Success")
+print("Correct")
 exit(0)
 

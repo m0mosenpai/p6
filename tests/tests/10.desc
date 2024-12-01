@@ -1,1 +1,1 @@
-mkfs: single dir
+raid1 -- mkdir: single dir

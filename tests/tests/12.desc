@@ -1,1 +1,1 @@
-mkfs: nested dir 2
+raid1 -- mknod: single file

@@ -1,1 +1,1 @@
-write: indirect block
+raid0 -- mknod: multi file
