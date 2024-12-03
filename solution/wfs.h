@@ -1,6 +1,8 @@
 #include <time.h>
 #include <sys/stat.h>
+#include <uuid/uuid.h>
 
+#define MIN_DISKS 2
 #define BLOCK_SIZE (512)
 #define MAX_NAME   (28)
 
@@ -22,6 +24,9 @@
 i_bitmap_ptr        i_blocks_ptr
 
 */
+#define RAID0  "0"
+#define RAID1  "1"
+#define RAID1v "1v"
 
 // Superblock
 struct wfs_sb {
@@ -31,8 +36,9 @@ struct wfs_sb {
     off_t d_bitmap_ptr;
     off_t i_blocks_ptr;
     off_t d_blocks_ptr;
-    size_t raid;
-    // Extend after this line
+    char *raid;
+    char uuid[UUID_STR_LEN];
+    char *disk_group[];
 };
 
 // Inode

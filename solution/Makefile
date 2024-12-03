@@ -1,8 +1,7 @@
 BINS = wfs mkfs
 CC = gcc
-CFLAGS = -Wall -Werror -pedantic -std=gnu18 -g
+CFLAGS = -luuid -Wall -Werror -pedantic -std=gnu18 -g
 FUSE_CFLAGS = `pkg-config fuse --cflags --libs`
-
 
 .PHONY: all
 all: $(BINS)
