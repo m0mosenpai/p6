@@ -90,8 +90,16 @@ int main(int argc, char *argv[]) {
 
     uuid_t uuid;
     char parsed_uuid[UUID_STR_LEN];
+    char *disk_uuids[dcnt];
     int inodesize, dblocksize;
     ssize_t req_totalsize;
+
+    for (i = 0; i < dcnt; i++) {
+        uuid_generate(uuid);
+        uuid_unparse_lower(uuid, parsed_uuid);
+        disk_uuids[i] = malloc(strlen(parsed_uuid) + 1);
+        strcpy(disk_uuids[i], parsed_uuid);
+    }
 
     for (i = 0; i < dcnt; i++) {
         FILE *disk = fopen(disks[i], "r+b");
@@ -138,11 +146,11 @@ int main(int argc, char *argv[]) {
         };
         superblock.raid = malloc(strlen(raid) + 1);
         strcpy(superblock.raid, raid);
-        uuid_generate(uuid);
-        uuid_unparse_lower(uuid, parsed_uuid);
-        strncpy(superblock.uuid, parsed_uuid, UUID_STR_LEN);
-        superblock.disk_group[i] = malloc(strlen(superblock.uuid) + 1);
-        strcpy(superblock.disk_group[i], superblock.uuid);
+        strcpy(superblock.uuid, disk_uuids[i]);
+        for (int j = 0; j < dcnt; j ++) {
+            superblock.disk_group[j] = malloc(strlen(disk_uuids[j]) + 1);
+            strcpy(superblock.disk_group[j], disk_uuids[j]);
+        }
 
         req_totalsize = sizeof(struct wfs_sb) + sizeof(inodebitmap) + sizeof(dbitmap) + inodes*BLOCK_SIZE + blocks*BLOCK_SIZE;
         fseek(disk, 0, SEEK_END);
