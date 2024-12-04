@@ -5,7 +5,6 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <uuid/uuid.h>
 #include "wfs.h"
 
 void freev(void **ptr, int len, int free_seg) {
@@ -26,25 +25,26 @@ int main(int argc, char *argv[]) {
     }
 
     int i;
-    char *raid;
     long inodes = -1;
     long blocks = -1;
     char **disks = calloc(MIN_DISKS, sizeof(char*));
     int ndisks = MIN_DISKS;
     int dcnt = 0;
     char *endptr, *str;
+    DiskMode raid;
 
     // ./mkfs -r 1 -d disk1 -d disk2 -i 32 -b 200
     for (i = 1; i < argc - 1; i++) {
         errno = 0;
         if (strcmp(argv[i], "-r") == 0) {
             str = argv[i + 1];
-            if (strcmp(str, RAID0) && strcmp(str, RAID1) && strcmp(str, RAID1v)) {
-              freev((void*)disks, ndisks, 1);
-              return 1;
+            if (strcmp(str, "0") == 0) raid = RAID_0;
+            else if (strcmp(str, "1") == 0) raid = RAID_1;
+            else if (strcmp(str, "1v") == 0) raid = RAID_1v;
+            else {
+                freev((void*)disks, ndisks, 1);
+                return 1;
             }
-            raid = malloc(strlen(str) + 1);
-            strcpy(raid, str);
         }
         else if (strcmp(argv[i], "-d") == 0) {
             str = argv[i + 1];
@@ -88,18 +88,8 @@ int main(int argc, char *argv[]) {
     inodes = roundup(inodes, 32);
     blocks = roundup(blocks, 32);
 
-    uuid_t uuid;
-    char parsed_uuid[UUID_STR_LEN];
-    char *disk_uuids[dcnt];
     int inodesize, dblocksize;
     ssize_t req_totalsize;
-
-    for (i = 0; i < dcnt; i++) {
-        uuid_generate(uuid);
-        uuid_unparse_lower(uuid, parsed_uuid);
-        disk_uuids[i] = malloc(strlen(parsed_uuid) + 1);
-        strcpy(disk_uuids[i], parsed_uuid);
-    }
 
     for (i = 0; i < dcnt; i++) {
         FILE *disk = fopen(disks[i], "r+b");
@@ -143,14 +133,9 @@ int main(int argc, char *argv[]) {
             .d_bitmap_ptr = superblock.i_bitmap_ptr + sizeof(inodebitmap),
             .i_blocks_ptr = roundup(superblock.d_bitmap_ptr + sizeof(dblocksize), BLOCK_SIZE),
             .d_blocks_ptr = superblock.i_blocks_ptr + inodes*BLOCK_SIZE,
+            .raid = raid,
+            .id = i + 1
         };
-        superblock.raid = malloc(strlen(raid) + 1);
-        strcpy(superblock.raid, raid);
-        strcpy(superblock.uuid, disk_uuids[i]);
-        for (int j = 0; j < dcnt; j ++) {
-            superblock.disk_group[j] = malloc(strlen(disk_uuids[j]) + 1);
-            strcpy(superblock.disk_group[j], disk_uuids[j]);
-        }
 
         req_totalsize = sizeof(struct wfs_sb) + sizeof(inodebitmap) + sizeof(dbitmap) + inodes*BLOCK_SIZE + blocks*BLOCK_SIZE;
         fseek(disk, 0, SEEK_END);

@@ -1,6 +1,5 @@
 #include <time.h>
 #include <sys/stat.h>
-#include <uuid/uuid.h>
 
 #define MIN_DISKS 2
 #define BLOCK_SIZE (512)
@@ -24,9 +23,13 @@
 i_bitmap_ptr        i_blocks_ptr
 
 */
-#define RAID0  "0"
-#define RAID1  "1"
-#define RAID1v "1v"
+
+// RAID Modes
+typedef enum {
+    RAID_0,
+    RAID_1,
+    RAID_1v
+} DiskMode;
 
 // Superblock
 struct wfs_sb {
@@ -36,9 +39,8 @@ struct wfs_sb {
     off_t d_bitmap_ptr;
     off_t i_blocks_ptr;
     off_t d_blocks_ptr;
-    char *raid;
-    char uuid[UUID_STR_LEN];
-    char *disk_group[];
+    DiskMode raid;
+    size_t id;
 };
 
 // Inode
