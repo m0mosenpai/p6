@@ -221,10 +221,9 @@ It creates disks, runs mkfs on them, and mounts with FUSE."
 (defun teardown-cmd ()
   "This is always the post command for filesystem tests.
 
-It un-mounts the mnt directory and removes the test disks."
-  (format
-   "%s; rm -f test-disk*"
-   (umount-cmd "mnt")))
+It removes the test disks."
+  (format "%s; rm -f test-disk*"
+	  "fusermount -uq mnt"))
 
 (defun mount-cmd (numdisks dir)
   "Mount wfs using NUMDISKS disks in single-threaded mode on DIR.
@@ -299,6 +298,8 @@ OUTPUT the expected output. Generally \"Correct\" or an error."
    (concat
     (fs-state-cmds fs-state "d")
     " && "
+    (umount-cmd "mnt")
+    " && "
     (verify-metadata-cmd fs-state 0 numdisks))
    output
    "0" rc "")) ; pre-rc should always be 0
@@ -329,6 +330,7 @@ OUTPUT the expected output. Generally \"Correct\" or an error."
     (list
      (fs-state-cmds fs-state "d")
      op
+     (umount-cmd "mnt")
      (verify-metadata-cmd post-state post-extra-blocks numdisks))
     " && ")
    output
