@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <errno.h>
 #include "wfs.h"
 
 void **disk_ptrs;
@@ -39,6 +40,12 @@ int validatedisk(struct wfs_sb sb) {
 }
 
 static int wfs_getattr(const char *path, struct stat *stbuf) {
+
+    int res;
+    res = lstat(path, stbuf);
+    if (res == -1) {
+        return -errno;
+    }
     return 0;
 }
 
@@ -46,24 +53,72 @@ static int wfs_mknod(const char *path, mode_t mode, dev_t rdev) {
     return 0;
 }
 
+// TO-DO: directory with same name exists or not
 static int wfs_mkdir(const char *path, mode_t mode) {
+    int res;
+
+	res = mkdir(path, mode);
+	if (res == -1)
+		return -errno;
+
     return 0;
 }
 
+// TO-DO: check if already linked or not
 static int wfs_unlink(const char *path) {
-    return 0;
+    int res;
+
+	res = unlink(path);
+	if (res == -1)
+		return -errno;
+
+	return 0;
 }
 
+// TO-DO: check directory exists or not
 static int wfs_rmdir(const char *path) {
-    return 0;
+    int res;
+
+	res = rmdir(path);
+	if (res == -1)
+		return -errno;
+
+	return 0;
 }
 
 static int wfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info* fi) {
-    return 0;
+    int fd;
+    int res;
+
+	(void) fi;
+    fd = open(path, O_RDONLY);
+    if (fd == -1) {
+        return -errno;
+    }
+    res = pread(fd, buf, size, offset);
+    if (res == -1) {
+        return -errno;
+    }
+
+    close(fd);
+    return res;
 }
 
 static int wfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info* fi) {
-    return 0;
+    int fd;
+    int res;
+
+	(void) fi;
+	fd = open(path, O_WRONLY);
+	if (fd == -1)
+		return -errno;
+
+	res = pwrite(fd, buf, size, offset);
+	if (res == -1)
+		res = -errno;
+
+	close(fd);
+	return res;
 }
 
 static int wfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi) {
