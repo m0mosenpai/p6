@@ -2,8 +2,10 @@
 #include <sys/stat.h>
 
 #define MIN_DISKS 2
+#define MAX_DISKS 16
 #define BLOCK_SIZE (512)
 #define MAX_NAME   (28)
+#define DISK_ID_SIZE (128)
 
 #define D_BLOCK    (6)
 #define IND_BLOCK  (D_BLOCK+1)
@@ -40,7 +42,9 @@ struct wfs_sb {
     off_t i_blocks_ptr;
     off_t d_blocks_ptr;
     DiskMode raid;
-    size_t id;
+    char id[DISK_ID_SIZE];
+    char disks[MAX_DISKS][DISK_ID_SIZE];
+    size_t num_disks;
 };
 
 // Inode

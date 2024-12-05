@@ -5,7 +5,38 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <sys/mman.h>
 #include "wfs.h"
+
+void **disk_ptrs;
+
+void freev(void **ptr, int len, int free_seg) {
+    if (len < 0) while (*ptr) { free(*ptr); *ptr++ = NULL; }
+    else { for (int i = 0; i < len; i++) free(ptr[i]); }
+    if (free_seg) free(ptr);
+}
+
+void* mapdisk(int dd) {
+    struct stat st;
+    if (fstat(dd, &st) < 0) {
+        return 0;
+    }
+    void *map_ptr = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, dd, 0);
+    if (map_ptr == MAP_FAILED) {
+        return 0;
+    }
+    return map_ptr;
+}
+
+int validatedisk(struct wfs_sb sb) {
+    for (int j = 0; j < sb.num_disks; j++) {
+        if (strcmp(sb.id, sb.disks[j]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 static int wfs_getattr(const char *path, struct stat *stbuf) {
     return 0;
@@ -50,23 +81,92 @@ static struct fuse_operations ops = {
   .readdir = wfs_readdir,
 };
 
+// ./wfs disk1 disk2 [FUSE options] mount_point
 int main(int argc, char *argv[]) {
-    if (argc <= 1) {
+    if (argc <= 2) {
         return -1;
     }
 
-    /*int i;*/
-    /*char **disks = calloc(MIN_DISKS, sizeof(char*));*/
-    /*int ndisks = MIN_DISKS;*/
-    /*int dcnt = 0;*/
-    /*char *endptr, *str;*/
-    /**/
-    /*// ./wfs disk1 disk2 [FUSE options] mount_point*/
-    /*for (i = 1; i < argc - 1; i++) {*/
-    /*    i += 1;*/
-    /*}*/
+    int i;
+    int dcnt = 0;
+    struct wfs_sb sb;
+    void *disk_ptr = NULL;
 
-    // Initialize FUSE with specified operations
-    // Filter argc and argv here and then pass it to fuse_main
-    return fuse_main(argc, argv, &ops, NULL);
+    // get first disk
+    int fd = open(argv[1], O_RDWR);
+    if (fd < 0) {
+        return -1;
+    }
+
+    if ((disk_ptr = mapdisk(fd)) == NULL) {
+        close(fd);
+        return -1;
+    }
+    memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
+    if (!validatedisk(sb)) {
+        close(fd);
+        return -1;
+    }
+    disk_ptrs = malloc(sb.num_disks * sizeof(void*));
+    disk_ptrs[0] = disk_ptr;
+    dcnt++;
+
+    int ndisks = MIN_DISKS;
+    char **disks = malloc(ndisks * sizeof(char*));
+    disks[0] = malloc(strlen(argv[1]) + 1);
+    strcpy(disks[0], argv[1]);
+
+    // TO-DO: parsing can be improved
+    // doesn't work if not -f or -s arguments present
+    // -s before -f hangs it. -f before -s exits gracefully ??
+    for (i = 2; i < argc; i++) {
+        if ((strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "-s") == 0)) {
+            if (dcnt != sb.num_disks) {
+                freev((void*)disks, ndisks, 1);
+                return -1;
+            }
+            break;
+        }
+        if (dcnt >= ndisks) {
+            ndisks *= 2;
+            disks = reallocarray(disks, ndisks, sizeof(char*));
+        }
+        disks[i-1] = malloc(strlen(argv[i]) + 1);
+        strcpy(disks[i-1], argv[i]);
+        dcnt++;
+    }
+    int fuse_argc = argc - dcnt - 1;
+    char **fuse_argv = malloc(fuse_argc * sizeof(char*));
+    while (i < argc) {
+        fuse_argv[i-dcnt-1] = malloc(strlen(argv[i]) + 1);
+        strcpy(fuse_argv[i-dcnt-1], argv[i]);
+        i++;
+    }
+
+    for (i = 0; i < sb.num_disks; i++) {
+        int fd = open(disks[i], O_RDWR);
+        if (fd < 0) {
+            freev((void*)disks, ndisks, 1);
+            freev((void*)fuse_argv, fuse_argc, 1);
+            return -1;
+        }
+        if ((disk_ptr = mapdisk(fd)) == NULL) {
+            close(fd);
+            freev((void*)disks, ndisks, 1);
+            freev((void*)fuse_argv, fuse_argc, 1);
+            return -1;
+        }
+        memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
+        if (!validatedisk(sb)) {
+            close(fd);
+            freev((void*)disks, ndisks, 1);
+            freev((void*)fuse_argv, fuse_argc, 1);
+            return -1;
+        }
+        disk_ptrs[i-1] = disk_ptr;
+        close(fd);
+    }
+
+    umask(0);
+    return fuse_main(fuse_argc, fuse_argv, &ops, NULL);
 }

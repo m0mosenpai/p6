@@ -13,6 +13,13 @@ void freev(void **ptr, int len, int free_seg) {
     if (free_seg) free(ptr);
 }
 
+void generate_id(int disk_index, char *id, size_t size) {
+    time_t ctime = time(NULL);
+    srand((unsigned) clock());
+    int random = rand();
+    snprintf(id, size, "%d-%ld-%d", disk_index, (long)ctime, random);
+}
+
 int roundup(int n, int k) {
     int r = n % k;
     if (r == 0) return n;
@@ -90,6 +97,13 @@ int main(int argc, char *argv[]) {
 
     int inodesize, dblocksize;
     ssize_t req_totalsize;
+    char id[DISK_ID_SIZE];
+    char disk_ids[MAX_DISKS][DISK_ID_SIZE];
+
+    for (i = 0; i < dcnt; i++) {
+        generate_id(i+1, id, sizeof(id));
+        strcpy(disk_ids[i], id);
+    }
 
     for (i = 0; i < dcnt; i++) {
         FILE *disk = fopen(disks[i], "r+b");
@@ -134,8 +148,12 @@ int main(int argc, char *argv[]) {
             .i_blocks_ptr = roundup(superblock.d_bitmap_ptr + sizeof(dblocksize), BLOCK_SIZE),
             .d_blocks_ptr = superblock.i_blocks_ptr + inodes*BLOCK_SIZE,
             .raid = raid,
-            .id = i + 1
+            .num_disks = dcnt
         };
+        strcpy(superblock.id, disk_ids[i]);
+        for (int j = 0; j < dcnt; j++) {
+            strcpy(superblock.disks[j], disk_ids[j]);
+        }
 
         req_totalsize = sizeof(struct wfs_sb) + sizeof(inodebitmap) + sizeof(dbitmap) + inodes*BLOCK_SIZE + blocks*BLOCK_SIZE;
         fseek(disk, 0, SEEK_END);
