@@ -116,17 +116,11 @@ int main(int argc, char *argv[]) {
     disks[0] = malloc(strlen(argv[1]) + 1);
     strcpy(disks[0], argv[1]);
 
-    // TO-DO: parsing can be improved
-    // doesn't work if not -f or -s arguments present
-    // -s before -f hangs it. -f before -s exits gracefully ??
-    for (i = 2; i < argc; i++) {
-        if ((strcmp(argv[i], "-f") == 0 || strcmp(argv[i], "-s") == 0)) {
-            if (dcnt != sb.num_disks) {
-                freev((void*)disks, ndisks, 1);
-                return -1;
-            }
-            break;
-        }
+    // TO-DO: read disks in only one place
+    // Works under the assumption "-s" or "-f" will always be present
+    i = 2;
+    char *delim = "-";
+    while (i < argc && strncmp(argv[i], delim, strlen(delim)) != 0) {
         if (dcnt >= ndisks) {
             ndisks *= 2;
             disks = reallocarray(disks, ndisks, sizeof(char*));
@@ -134,8 +128,18 @@ int main(int argc, char *argv[]) {
         disks[i-1] = malloc(strlen(argv[i]) + 1);
         strcpy(disks[i-1], argv[i]);
         dcnt++;
+        i++;
     }
+    if (dcnt != sb.num_disks) {
+        freev((void*)disks, ndisks, 1);
+        return -1;
+    }
+
     int fuse_argc = argc - dcnt - 1;
+    if (fuse_argc == 0) {
+        freev((void*)disks, ndisks, 1);
+        return -1;
+    }
     char **fuse_argv = malloc(fuse_argc * sizeof(char*));
     while (i < argc) {
         fuse_argv[i-dcnt-1] = malloc(strlen(argv[i]) + 1);
