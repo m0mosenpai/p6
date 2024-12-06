@@ -11,6 +11,7 @@
 #include "wfs.h"
 
 void **disk_ptrs;
+int total_disks;
 
 void freev(void **ptr, int len, int free_seg) {
     if (len < 0) while (*ptr) { free(*ptr); *ptr++ = NULL; }
@@ -146,34 +147,11 @@ int main(int argc, char *argv[]) {
     int dcnt = 0;
     struct wfs_sb sb;
     void *disk_ptr = NULL;
-
-    // get first disk
-    int fd = open(argv[1], O_RDWR);
-    if (fd < 0) {
-        return -1;
-    }
-
-    if ((disk_ptr = mapdisk(fd)) == NULL) {
-        close(fd);
-        return -1;
-    }
-    memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
-    if (!validatedisk(sb)) {
-        close(fd);
-        return -1;
-    }
-    disk_ptrs = malloc(sb.num_disks * sizeof(void*));
-    disk_ptrs[0] = disk_ptr;
-    dcnt++;
-
     int ndisks = MIN_DISKS;
     char **disks = malloc(ndisks * sizeof(char*));
-    disks[0] = malloc(strlen(argv[1]) + 1);
-    strcpy(disks[0], argv[1]);
 
-    // TO-DO: read disks in only one place
     // Works under the assumption "-s" or "-f" will always be present
-    i = 2;
+    i = 1;
     char *delim = "-";
     while (i < argc && strncmp(argv[i], delim, strlen(delim)) != 0) {
         if (dcnt >= ndisks) {
@@ -184,10 +162,6 @@ int main(int argc, char *argv[]) {
         strcpy(disks[i-1], argv[i]);
         dcnt++;
         i++;
-    }
-    if (dcnt != sb.num_disks) {
-        freev((void*)disks, ndisks, 1);
-        return -1;
     }
 
     int fuse_argc = argc - dcnt - 1;
@@ -202,7 +176,7 @@ int main(int argc, char *argv[]) {
         i++;
     }
 
-    for (i = 0; i < sb.num_disks; i++) {
+    for (i = 0; i < dcnt; i++) {
         int fd = open(disks[i], O_RDWR);
         if (fd < 0) {
             freev((void*)disks, ndisks, 1);
@@ -222,7 +196,17 @@ int main(int argc, char *argv[]) {
             freev((void*)fuse_argv, fuse_argc, 1);
             return -1;
         }
-        disk_ptrs[i-1] = disk_ptr;
+        if (i == 0) {
+            total_disks = sb.num_disks;
+            disk_ptrs = malloc(total_disks * sizeof(void*));
+            if (dcnt != total_disks) {
+                close(fd);
+                freev((void*)disks, ndisks, 1);
+                freev((void*)fuse_argv, fuse_argc, 1);
+                return -1;
+            }
+        }
+        disk_ptrs[i] = disk_ptr;
         close(fd);
     }
 
