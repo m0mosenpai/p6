@@ -137,7 +137,7 @@ int main(int argc, char *argv[]) {
             .mtim = ctime,
             .ctim = ctime,
         };
-        memset(root.blocks, 0, N_BLOCKS*(sizeof(off_t)));
+        memset(root.blocks, -1, N_BLOCKS*(sizeof(off_t)));
 
         // init superblock
         struct wfs_sb superblock = {
