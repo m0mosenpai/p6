@@ -56,7 +56,6 @@ int validatepath(const char* path, void *disk_ptr) {
     off_t blocks[N_BLOCKS];
     int inum;
     int found;
-    int res;
     int i;
 
     memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
@@ -85,20 +84,17 @@ int validatepath(const char* path, void *disk_ptr) {
                     }
                 }
                 if (found) {
-                    if (inum != -1) {
-                        res = inum;
-                    }
                     break;
                 }
             }
             i++;
         }
         if (!found) {
-            return 0;
+            return -1;
         }
         tok = strtok(NULL, delim);
     }
-    return res;
+    return inum;
 }
 
 struct wfs_inode *alloc_inode(void *disk_ptr, mode_t mode) {
@@ -171,7 +167,7 @@ static int wfs_getattr(const char *path, struct stat *stbuf) {
     // read from any disk (mirrored)
     else if (raid == RAID_1) {
         void *disk_ptr = disk_ptrs[0];
-        if ((inum = validatepath(path, disk_ptr)) == 0) {
+        if ((inum = validatepath(path, disk_ptr)) == -1) {
             return -ENOENT;
         }
         memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
