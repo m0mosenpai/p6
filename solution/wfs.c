@@ -119,7 +119,7 @@ struct wfs_inode fetch_inode(int inum, void *disk_ptr) {
     return inode;
 }
 
-int data_exists(const char* data, int inum, void *disk_ptr) {
+int data_exists(const char* dataname, mode_t mode, int inum, void *disk_ptr) {
     struct wfs_sb sb;
     struct wfs_inode inode;
     struct wfs_dentry dentry;
@@ -129,11 +129,17 @@ int data_exists(const char* data, int inum, void *disk_ptr) {
     memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
     d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr;
     inode = fetch_inode(inum, disk_ptr);
+    if (inode.mode != mode) {
+        return 0;
+    }
+
     while (i < N_BLOCKS) {
-        if (inode.blocks[i] == -1) continue;
+        if (inode.blocks[i] == -1)
+            continue;
+
         for (off_t ptr = d_blocks_ptr + (inode.blocks[i] * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
             memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
-            if (strcmp(dentry.name, data) == 0) {
+            if (strcmp(dentry.name, dataname) == 0) {
                 return 1;
             }
         }
@@ -310,27 +316,25 @@ static int wfs_getattr(const char *path, struct stat *stbuf) {
 }
 
 static int wfs_mknod(const char *path, mode_t mode, dev_t rdev) {
-    return 0;
-}
-
-static int wfs_mkdir(const char *path, mode_t mode) {
     int p_inum;
     void *curr_disk;
     char *name;
     struct wfs_inode *new_inode;
     struct wfs_dentry *block_ptr;
-    mode_t dir_mode = S_IFDIR | 0755;
+    mode_t file_mode = mode | S_IFREG;
     int i;
 
     if (path == NULL || strlen(path) == 0) {
         return -ENOENT;
     }
 
-    // TO-DO: check name length
     if ((name = strrchr(path, '/')) == NULL) {
         return 0;
     }
     name++;
+    if (strlen(name) > MAX_NAME) {
+        return -ENOENT;
+    }
 
     if (raid == RAID_0) {
     }
@@ -341,7 +345,59 @@ static int wfs_mkdir(const char *path, mode_t mode) {
             if ((p_inum = validatepath(parentpath, curr_disk)) == -1) {
                 return -ENOENT;
             }
-            if (data_exists(name, p_inum, curr_disk)) {
+            if (data_exists(name, file_mode, p_inum, curr_disk)) {
+                return -EEXIST;
+            }
+            if ((new_inode = alloc_inode(curr_disk, file_mode)) == 0) {
+                return -ENOSPC;
+            };
+            if ((block_ptr = fetch_available_block(p_inum, curr_disk)) == 0) {
+                return -ENOSPC;
+            }
+            struct wfs_dentry new_dentry = {
+                .num = new_inode->num
+            };
+            strcpy(new_dentry.name, name);
+            memcpy(block_ptr, &new_dentry, sizeof(struct wfs_dentry));
+        }
+    } else {
+
+    }
+
+    return 0;
+}
+
+static int wfs_mkdir(const char *path, mode_t mode) {
+    int p_inum;
+    void *curr_disk;
+    char *name;
+    struct wfs_inode *new_inode;
+    struct wfs_dentry *block_ptr;
+    mode_t dir_mode = mode | S_IFDIR;
+    int i;
+
+    if (path == NULL || strlen(path) == 0) {
+        return -ENOENT;
+    }
+
+    if ((name = strrchr(path, '/')) == NULL) {
+        return 0;
+    }
+    name++;
+    if (strlen(name) > MAX_NAME) {
+        return -ENOENT;
+    }
+
+    if (raid == RAID_0) {
+    }
+    else if (raid == RAID_1) {
+        for (i = 0; i < total_disks; i++) {
+            curr_disk = disk_ptrs[i];
+            const char *parentpath = getparentpath(path);
+            if ((p_inum = validatepath(parentpath, curr_disk)) == -1) {
+                return -ENOENT;
+            }
+            if (data_exists(name, dir_mode, p_inum, curr_disk)) {
                 return -EEXIST;
             }
             if ((new_inode = alloc_inode(curr_disk, dir_mode)) == 0) {
