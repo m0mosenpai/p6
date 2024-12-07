@@ -229,6 +229,42 @@ struct wfs_dentry* alloc_datablock(void *disk_ptr) {
     return (struct wfs_dentry*)d_blocks_ptr;
 }
 
+struct wfs_dentry* fetch_available_block(int inum, void *disk) {
+    struct wfs_inode inode;
+    struct wfs_sb sb;
+    struct wfs_dentry dentry;
+    off_t d_blocks_ptr;
+    int j;
+
+    memcpy(&sb, disk, sizeof(struct wfs_sb));
+    d_blocks_ptr = (off_t)disk + sb.d_blocks_ptr;
+    inode = fetch_inode(inum, disk);
+
+    // get dentry from existing datablock
+    j = 0;
+    while (j < N_BLOCKS) {
+        if (inode.blocks[j] == -1)
+            continue;
+
+        for (off_t ptr = d_blocks_ptr + (inode.blocks[j] * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
+            memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
+            if (dentry.num == -1) {
+                return (struct wfs_dentry*)ptr;
+            }
+        }
+        j++;
+    }
+    // try to create new datablock
+    j = 0;
+    while (j < N_BLOCKS) {
+        if (inode.blocks[j] == -1) {
+            return alloc_datablock(disk);
+        }
+        j++;
+    }
+    return 0;
+}
+
 static int wfs_getattr(const char *path, struct stat *stbuf) {
     int i;
     void *disk;
@@ -279,15 +315,12 @@ static int wfs_mknod(const char *path, mode_t mode, dev_t rdev) {
 
 static int wfs_mkdir(const char *path, mode_t mode) {
     int p_inum;
-    int i, j = 0;
     void *curr_disk;
     char *name;
-    struct wfs_sb sb;
-    off_t d_blocks_ptr;
-    struct wfs_inode p_inode;
     struct wfs_inode *new_inode;
-    struct wfs_dentry dentry;
+    struct wfs_dentry *block_ptr;
     mode_t dir_mode = S_IFDIR | 0755;
+    int i;
 
     if (path == NULL || strlen(path) == 0) {
         return -ENOENT;
@@ -304,8 +337,6 @@ static int wfs_mkdir(const char *path, mode_t mode) {
     else if (raid == RAID_1) {
         for (i = 0; i < total_disks; i++) {
             curr_disk = disk_ptrs[i];
-            memcpy(&sb, curr_disk, sizeof(struct wfs_sb));
-            d_blocks_ptr = (off_t)curr_disk + sb.d_blocks_ptr;
             const char *parentpath = getparentpath(path);
             if ((p_inum = validatepath(parentpath, curr_disk)) == -1) {
                 return -ENOENT;
@@ -316,32 +347,14 @@ static int wfs_mkdir(const char *path, mode_t mode) {
             if ((new_inode = alloc_inode(curr_disk, dir_mode)) == 0) {
                 return -ENOSPC;
             };
-            p_inode = fetch_inode(p_inum, curr_disk);
-            int success = 0;
-            while (j < N_BLOCKS) {
-                if (p_inode.blocks[j] == -1)
-                    continue;
-                for (off_t ptr = d_blocks_ptr+(p_inode.blocks[j]*BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
-                    memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
-                    if (dentry.num != -1)
-                        continue;
-
-                    struct wfs_dentry new_dentry = {
-                        .num = new_inode->num,
-                    };
-                    strcpy(new_dentry.name, name);
-                    memcpy((void*)(ptr + sizeof(struct wfs_dentry)), &new_dentry, sizeof(struct wfs_dentry));
-                    success = 1;
-                    break;
-                }
-                if (success) {
-                    break;
-                }
-                j++;
-            }
-            if (success == 0) {
+            if ((block_ptr = fetch_available_block(p_inum, curr_disk)) == 0) {
                 return -ENOSPC;
             }
+            struct wfs_dentry new_dentry = {
+                .num = new_inode->num
+            };
+            strcpy(new_dentry.name, name);
+            memcpy(block_ptr, &new_dentry, sizeof(struct wfs_dentry));
         }
     } else {
 
