@@ -113,6 +113,19 @@ const char* getparentpath(const char *path) {
     return parentpath;
 }
 
+const char* getname(const char *path) {
+    char *name;
+
+    if ((name = strrchr(path, '/')) == NULL) {
+        return 0;
+    }
+    name++;
+    if (strlen(name) > MAX_NAME) {
+        return 0;
+    }
+    return name;
+}
+
 struct wfs_inode fetch_inode(int inum, void *disk_ptr) {
     struct wfs_sb sb;
     struct wfs_inode inode;
@@ -124,12 +137,24 @@ struct wfs_inode fetch_inode(int inum, void *disk_ptr) {
     return inode;
 }
 
+struct wfs_dentry fetch_block(int dnum, void *disk_ptr) {
+    struct wfs_sb sb;
+    struct wfs_dentry dentry;
+    off_t d_blocks_ptr;
+
+    memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
+    d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr;
+    memcpy(&dentry, (void*)(d_blocks_ptr + (dnum * BLOCK_SIZE)), sizeof(struct wfs_dentry));
+    return dentry;
+}
+
 int data_exists(const char* dataname, mode_t mode, int inum, void *disk_ptr) {
     struct wfs_sb sb;
     struct wfs_inode inode;
     struct wfs_dentry dentry;
     off_t d_blocks_ptr;
-    int i = 0;
+    int dnum;
+    int i;
 
     memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
     d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr;
@@ -138,18 +163,20 @@ int data_exists(const char* dataname, mode_t mode, int inum, void *disk_ptr) {
         return 0;
     }
 
+    i = 0;
     while (i < N_BLOCKS) {
-        if (inode.blocks[i] == -1)
+        dnum = inode.blocks[i];
+        if (dnum == -1)
             continue;
 
-        for (off_t ptr = d_blocks_ptr + (inode.blocks[i] * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
+        for (off_t ptr = d_blocks_ptr + (dnum * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
             memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
             if (strcmp(dentry.name, dataname) == 0) {
-                return 1;
+                return dnum;
             }
         }
     }
-    return 0;
+    return -1;
 }
 
 struct wfs_inode* alloc_inode(void *disk_ptr, mode_t mode) {
@@ -242,43 +269,85 @@ struct wfs_dentry* alloc_datablock(void *disk_ptr) {
     return (struct wfs_dentry*)d_blocks_ptr;
 }
 
-int free_datablock(const char *name, int inum, mode_t mode, void *disk_ptr) {
+int free_dentry(int inum, int t_inum, void *disk_ptr) {
     struct wfs_inode inode;
     struct wfs_sb sb;
     struct wfs_dentry dentry;
-    int dblocksize;
-    off_t d_bitmap_ptr;
     off_t d_blocks_ptr;
     int dnum;
     int i;
 
     memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
-    dblocksize = roundup(sb.num_data_blocks, 8) / 8;
-    unsigned char dbitmap[dblocksize];
-    d_bitmap_ptr = (off_t)disk_ptr + sb.d_bitmap_ptr;
     d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr;
-    memcpy(&dbitmap, (void*)d_bitmap_ptr, dblocksize);
     inode = fetch_inode(inum, disk_ptr);
 
     i = 0;
     while (i < N_BLOCKS) {
-        if (inode.blocks[i] == -1 || (inode.mode & S_IFMT) != mode)
+        dnum = inode.blocks[i];
+        if (dnum == -1)
             continue;
 
-        dnum = inode.blocks[i];
-        for (off_t ptr = d_blocks_ptr + (inode.blocks[i] * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
+        for (off_t ptr = d_blocks_ptr + (dnum * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
             memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
-            if (strcmp(dentry.name, name) == 0) {
+            if (dentry.num == t_inum) {
                 dentry.num = -1;
-                memcpy((void*)ptr, &dentry, sizeof(struct wfs_dentry));
-                dbitmap[dnum] = -1;
-                memcpy((void*)d_bitmap_ptr, &dbitmap, dblocksize);
-                return 1;
             }
+            memcpy((void*)ptr, &dentry, sizeof(struct wfs_dentry));
+            return 1;
         }
+    }
+    return 0;
+}
+
+int free_data(int inum, const char *name, void *disk_ptr) {
+    struct wfs_inode inode;
+    struct wfs_sb sb;
+    struct wfs_dentry dentry;
+    off_t i_bitmap_ptr;
+    off_t d_bitmap_ptr;
+    off_t i_blocks_ptr;
+    off_t d_blocks_ptr;
+    int inodesize;
+    int dblocksize;
+    int dnum;
+    int i;
+
+    memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
+    inodesize = roundup(sb.num_inodes, 8) / 8;
+    dblocksize = roundup(sb.num_data_blocks, 8) / 8;
+    unsigned char inodebitmap[inodesize];
+    unsigned char dbitmap[dblocksize];
+    i_bitmap_ptr = (off_t)disk_ptr + sb.i_bitmap_ptr;
+    d_bitmap_ptr = (off_t)disk_ptr + sb.d_bitmap_ptr;
+    i_blocks_ptr = (off_t)disk_ptr + sb.i_blocks_ptr;
+    d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr;
+    memcpy(&inodebitmap, (void*)i_bitmap_ptr, inodesize);
+    memcpy(&dbitmap, (void*)d_bitmap_ptr, dblocksize);
+    inode = fetch_inode(inum, disk_ptr);
+
+    // clear all data blocks in inode
+    i = 0;
+    while (i < N_BLOCKS) {
+        dnum = inode.blocks[i];
+        if (dnum == -1)
+            continue;
+
+        for (off_t ptr = d_blocks_ptr + (dnum * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
+            memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
+            dentry.num = -1;
+            memcpy((void*)ptr, &dentry, sizeof(struct wfs_dentry));
+            return 1;
+        }
+        dbitmap[dnum] = 0;
+        memcpy((void*)d_bitmap_ptr, &dbitmap, dblocksize);
         i++;
     }
 
+    // clear inode
+    inode.num = -1;
+    inodebitmap[inum] = 0;
+    memcpy((void*)i_blocks_ptr + (inum * BLOCK_SIZE), &inode, sizeof(struct wfs_inode));
+    memcpy((void*)i_bitmap_ptr, &inodebitmap, inodesize);
     return 0;
 }
 
@@ -318,6 +387,81 @@ struct wfs_dentry* fetch_available_block(int inum, void *disk_ptr) {
     return 0;
 }
 
+int read_blocks(int inum, char *buffer, size_t size, off_t offset, void *disk_ptr) {
+    struct wfs_inode inode;
+    struct wfs_sb sb;
+    struct wfs_dentry dentry;
+    off_t d_blocks_ptr, b_ptr;
+    size_t bytes_read;
+    int dnum;
+    int i;
+
+    memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
+    d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr + offset;
+    inode = fetch_inode(inum, disk_ptr);
+    if ((inode.mode & S_IFMT) != S_IFREG) {
+        return 0;
+    }
+
+    i = 0;
+    bytes_read = 0;
+    while (i < N_BLOCKS) {
+        dnum = inode.blocks[i];
+        if (dnum == -1)
+            continue;
+
+        b_ptr = d_blocks_ptr + (dnum * BLOCK_SIZE);
+        if (size > BLOCK_SIZE) {
+            memcpy(buffer + bytes_read, (void*)b_ptr, BLOCK_SIZE);
+            bytes_read += BLOCK_SIZE;
+            size -= BLOCK_SIZE;
+        }
+        else if (size > 0 && size < BLOCK_SIZE) {
+            memcpy(buffer + bytes_read, (void*)b_ptr, size);
+            size = 0;
+        }
+        if (size == 0) {
+            return 1;
+        }
+        i++;
+    }
+    return 0;
+}
+
+int read_dentries(int inum, char *buffer, fuse_fill_dir_t filler, off_t offset, void *disk_ptr) {
+    struct wfs_inode inode;
+    struct wfs_sb sb;
+    struct wfs_dentry dentry;
+    off_t d_blocks_ptr, b_ptr;
+    size_t bytes_read;
+    int dnum;
+    int i;
+
+    memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
+    d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr + offset;
+    inode = fetch_inode(inum, disk_ptr);
+    if ((inode.mode & S_IFMT) != S_IFDIR) {
+        return 0;
+    }
+
+    i = 0;
+    while (i < N_BLOCKS) {
+        dnum = inode.blocks[i];
+        if (dnum == -1)
+            continue;
+
+        for (off_t ptr = d_blocks_ptr + (dnum * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
+            memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
+            if (dentry.num == -1)
+                continue;
+
+            filler(buffer, dentry.name, NULL, NULL);
+        }
+        i++;
+    }
+    return 1;
+}
+
 static int wfs_getattr(const char *path, struct stat *stbuf) {
     int i;
     void *disk;
@@ -329,35 +473,31 @@ static int wfs_getattr(const char *path, struct stat *stbuf) {
 
     memset(stbuf, 0, sizeof(struct stat));
 
-    // TO-DO: round-robin read (striped)
-    if (raid == RAID_0) {
-        for (i = 0; i < total_disks; i++) {
+    switch (raid) {
+        case RAID_0:
+            break;
+
+        case RAID_1:
             disk = disk_ptrs[0];
+            if ((inum = validatepath(path, 0, disk)) == -1) {
+                return -ENOENT;
+            }
             memcpy(&sb, disk, sizeof(struct wfs_sb));
-        }
-    }
-    // read from any disk (mirrored)
-    else if (raid == RAID_1) {
-        void *disk_ptr = disk_ptrs[0];
-        if ((inum = validatepath(path, 0, disk_ptr)) == -1) {
-            return -ENOENT;
-        }
-        memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
-        i_blocks_ptr = (off_t)disk_ptr + sb.i_blocks_ptr;
-        memcpy(&inode, (void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), sizeof(struct wfs_inode));
+            i_blocks_ptr = (off_t)disk + sb.i_blocks_ptr;
+            memcpy(&inode, (void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), sizeof(struct wfs_inode));
 
-        stbuf->st_uid = inode.uid;
-        stbuf->st_gid = inode.gid;
-        stbuf->st_mode = inode.mode;
-        stbuf->st_size = inode.size;
-        tim.tv_sec = inode.atim;
-        stbuf->st_atim = tim;
-        tim.tv_sec = inode.mtim;
-        stbuf->st_mtim = tim;
-    }
-    // verified-mirroring ??
-    else {
+            stbuf->st_uid = inode.uid;
+            stbuf->st_gid = inode.gid;
+            stbuf->st_mode = inode.mode;
+            stbuf->st_size = inode.size;
+            tim.tv_sec = inode.atim;
+            stbuf->st_atim = tim;
+            tim.tv_sec = inode.mtim;
+            stbuf->st_mtim = tim;
+            break;
 
+        case RAID_1v:
+            break;
     }
     return 0;
 }
@@ -365,7 +505,8 @@ static int wfs_getattr(const char *path, struct stat *stbuf) {
 static int wfs_mknod(const char *path, mode_t mode, dev_t rdev) {
     int p_inum;
     void *curr_disk;
-    char *name;
+    const char *name;
+    const char *parentpath;
     struct wfs_inode *new_inode;
     struct wfs_dentry *block_ptr;
     mode_t file_mode = mode | S_IFREG;
@@ -373,20 +514,14 @@ static int wfs_mknod(const char *path, mode_t mode, dev_t rdev) {
     if (path == NULL || strlen(path) == 0) {
         return -ENOENT;
     }
-    if ((name = strrchr(path, '/')) == NULL) {
-        return 0;
-    }
-    name++;
-    if (strlen(name) > MAX_NAME) {
-        return -ENOENT;
-    }
+    name = getname(path);
+    parentpath = getparentpath(path);
 
     curr_disk = disk_ptrs[0];
-    const char *parentpath = getparentpath(path);
     if ((p_inum = validatepath(parentpath, S_IFDIR, curr_disk)) == -1) {
         return -ENOENT;
     }
-    if (data_exists(name, file_mode, p_inum, curr_disk)) {
+    if (data_exists(name, file_mode, p_inum, curr_disk) != -1) {
         return -EEXIST;
     }
     if ((new_inode = alloc_inode(curr_disk, file_mode)) == 0) {
@@ -406,7 +541,8 @@ static int wfs_mknod(const char *path, mode_t mode, dev_t rdev) {
 static int wfs_mkdir(const char *path, mode_t mode) {
     int p_inum;
     void *curr_disk;
-    char *name;
+    const char *name;
+    const char *parentpath;
     struct wfs_inode *new_inode;
     struct wfs_dentry *block_ptr;
     mode_t dir_mode = mode | S_IFDIR;
@@ -414,20 +550,14 @@ static int wfs_mkdir(const char *path, mode_t mode) {
     if (path == NULL || strlen(path) == 0) {
         return -ENOENT;
     }
-    if ((name = strrchr(path, '/')) == NULL) {
-        return 0;
-    }
-    name++;
-    if (strlen(name) > MAX_NAME) {
-        return -ENOENT;
-    }
+    name = getname(path);
+    parentpath = getparentpath(path);
 
     curr_disk = disk_ptrs[0];
-    const char *parentpath = getparentpath(path);
     if ((p_inum = validatepath(parentpath, S_IFDIR, curr_disk)) == -1) {
         return -ENOENT;
     }
-    if (data_exists(name, dir_mode, p_inum, curr_disk)) {
+    if (data_exists(name, dir_mode, p_inum, curr_disk) != -1) {
         return -EEXIST;
     }
     if ((new_inode = alloc_inode(curr_disk, dir_mode)) == 0) {
@@ -445,98 +575,139 @@ static int wfs_mkdir(const char *path, mode_t mode) {
 }
 
 static int wfs_unlink(const char *path) {
-    int p_inum;
+    int inum, p_inum;
     void *curr_disk;
-    char *name;
+    const char *name;
+    const char *parentpath;
     mode_t dir_mode = S_IFDIR;
     mode_t file_mode = S_IFREG;
 
     if (path == NULL || strlen(path) == 0) {
         return -ENOENT;
     }
-    if ((name = strrchr(path, '/')) == NULL) {
-        return -ENOENT;
-    }
-    name++;
-    if (strlen(name) > MAX_NAME) {
-        return -ENOENT;
-    }
+    name = getname(path);
+    parentpath = getparentpath(path);
 
     curr_disk = disk_ptrs[0];
-    const char *parentpath = getparentpath(path);
-    if ((p_inum = validatepath(parentpath, dir_mode, curr_disk)) == -1) {
+    if ((inum = validatepath(path, file_mode, curr_disk)) == -1) {
         return -ENOENT;
     }
-    if (free_datablock(name, p_inum, file_mode, curr_disk) != 1) {
-        return -EEXIST;
+    p_inum = validatepath(parentpath, dir_mode, curr_disk);
+    if (free_dentry(p_inum, inum, curr_disk) != 1) {
+        return -ENOENT;
+    }
+    if (free_data(inum, name, curr_disk) != 1) {
+        return -ENOENT;
     }
     return 0;
 }
 
 static int wfs_rmdir(const char *path) {
-    int p_inum;
+    int inum, p_inum;
     void *curr_disk;
-    char *name;
+    const char *name;
+    const char *parentpath;
     mode_t dir_mode = S_IFDIR;
 
     if (path == NULL || strlen(path) == 0) {
         return -ENOENT;
     }
-    if ((name = strrchr(path, '/')) == NULL) {
-        return -ENOENT;
-    }
-    name++;
-    if (strlen(name) > MAX_NAME) {
-        return -ENOENT;
-    }
+    name = getname(path);
+    parentpath = getparentpath(path);
 
     curr_disk = disk_ptrs[0];
-    const char *parentpath = getparentpath(path);
-    if ((p_inum = validatepath(parentpath, dir_mode, curr_disk)) == -1) {
+    if ((inum = validatepath(path, dir_mode, curr_disk)) == -1) {
         return -ENOENT;
     }
-    if (free_datablock(name, p_inum, dir_mode, curr_disk) != 1) {
-        return -EEXIST;
+    p_inum = validatepath(parentpath, dir_mode, curr_disk);
+    if (free_dentry(p_inum, inum, curr_disk) != 1) {
+        return -ENOENT;
+    }
+    if (free_data(inum, name, curr_disk) != 1) {
+        return -ENOENT;
     }
     return 0;
 }
 
 static int wfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info* fi) {
-    int fd;
-    int res;
+    int inum;
+    void *curr_disk;
+    mode_t dir_mode = S_IFDIR;
 
-	(void) fi;
-    fd = open(path, O_RDONLY);
-    if (fd == -1) {
-        return -errno;
-    }
-    res = pread(fd, buf, size, offset);
-    if (res == -1) {
-        return -errno;
+    if (path == NULL || strlen(path) == 0) {
+        return -ENOENT;
     }
 
-    close(fd);
-    return res;
+    switch(raid) {
+        case RAID_0:
+            break;
+
+        case RAID_1:
+            curr_disk = disk_ptrs[0];
+            if ((inum = validatepath(path, dir_mode, curr_disk)) == -1) {
+                return -ENOENT;
+            }
+            if (read_blocks(inum, buf, size, offset, curr_disk) != 1) {
+                return -ENOENT;
+            }
+            break;
+
+        case RAID_1v:
+            break;
+    }
+    return 0;
 }
 
 static int wfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info* fi) {
-    int fd;
-    int res;
+    int i;
+    void *curr_disk;
 
-	(void) fi;
-	fd = open(path, O_WRONLY);
-	if (fd == -1)
-		return -errno;
+    if (path == NULL || strlen(path) == 0) {
+        return -ENOENT;
+    }
 
-	res = pwrite(fd, buf, size, offset);
-	if (res == -1)
-		res = -errno;
+    switch(raid) {
+        case RAID_0:
+            break;
 
-	close(fd);
-	return res;
+        case RAID_1:
+            curr_disk = disk_ptrs[0];
+            for (i = 1; i < total_disks; i++) {
+            }
+            break;
+
+        case RAID_1v:
+            break;
+    }
+    return 0;
 }
 
 static int wfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi) {
+    int inum;
+    void *curr_disk;
+    mode_t dir_mode = S_IFDIR;
+
+    if (path == NULL || strlen(path) == 0) {
+        return -ENOENT;
+    }
+
+    switch(raid) {
+        case RAID_0:
+            break;
+
+        case RAID_1:
+            curr_disk = disk_ptrs[0];
+            if ((inum = validatepath(path, dir_mode, curr_disk)) == -1) {
+                return -ENOENT;
+            }
+            if (read_dentries(inum, buf, filler, offset, curr_disk) != 1) {
+                return -ENOENT;
+            }
+            break;
+
+        case RAID_1v:
+            break;
+    }
     return 0;
 }
 
@@ -564,7 +735,6 @@ int main(int argc, char *argv[]) {
     int ndisks = MIN_DISKS;
     char **disks = malloc(ndisks * sizeof(char*));
 
-    // Works under the assumption "-s" or "-f" will always be present
     i = 1;
     char *delim = "-";
     while (i < argc && strncmp(argv[i], delim, strlen(delim)) != 0) {
