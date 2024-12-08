@@ -11,6 +11,7 @@
 #include "wfs.h"
 
 void **disk_ptrs;
+size_t *disk_sizes;
 int total_disks;
 DiskMode raid;
 int dentries = BLOCK_SIZE / sizeof(struct wfs_dentry);
@@ -48,11 +49,19 @@ int validatedisk(struct wfs_sb sb) {
     return 0;
 }
 
-int mirror_data(void *maindisk, void *src, size_t size) {
+/*int mirror_data(void *maindisk, void *src, size_t size) {*/
+/*    printf("===============> Copying to other disks\n");*/
+/*    for (int i = 1; i < total_disks; i++) {*/
+/*        printf("===============> DISK: %d\n", i+1);*/
+/*        memcpy((void*)((off_t)disk_ptrs[i] + (off_t)src - (off_t)maindisk), src, size);*/
+/*    }*/
+/*    return 1;*/
+/*}*/
+
+void mirror_data(void *maindisk) {
     for (int i = 1; i < total_disks; i++) {
-        memcpy((void*)((off_t)disk_ptrs[i] + (off_t)src), (void*)((off_t)maindisk + (off_t)src), size);
+        memcpy(disk_ptrs[i], maindisk, disk_sizes[0]);
     }
-    return 1;
 }
 
 void memcpy_v(void *dst, void *src, size_t size) {
@@ -61,7 +70,8 @@ void memcpy_v(void *dst, void *src, size_t size) {
         case RAID_0:
             break;
         default:
-            mirror_data(disk_ptrs[0], src, size);
+            /*mirror_data(disk_ptrs[0], dst, size);*/
+            mirror_data(disk_ptrs[0]);
             break;
     }
 }
@@ -75,7 +85,7 @@ struct wfs_inode fetch_inode(int inum, void *disk_ptr) {
     i_blocks_ptr = (off_t)disk_ptr + sb.i_blocks_ptr;
     memcpy(&inode, (void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), sizeof(struct wfs_inode));
     inode.atim = time(NULL);
-    memcpy((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
+    memcpy_v((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
     return inode;
 }
 
@@ -234,7 +244,7 @@ struct wfs_inode* alloc_inode(void *disk_ptr, mode_t mode) {
     }
     printf("found free inode space: %d\n", free_i);
     inodebitmap[free_i / 8] |= (1 << (free_i % 8));
-    memcpy((void*)i_bitmap_ptr, &inodebitmap, inodesize);
+    memcpy_v((void*)i_bitmap_ptr, &inodebitmap, inodesize);
 
     i = 0;
     while (i != free_i) {
@@ -257,7 +267,7 @@ struct wfs_inode* alloc_inode(void *disk_ptr, mode_t mode) {
     printf("inode inum: %d\n", new_inode.num);
     printf("inode time: %ld\n", new_inode.atim);
     memset(new_inode.blocks, -1, N_BLOCKS*(sizeof(off_t)));
-    memcpy((void*)i_blocks_ptr, &new_inode, sizeof(struct wfs_inode));
+    memcpy_v((void*)i_blocks_ptr, &new_inode, sizeof(struct wfs_inode));
     struct wfs_inode test_inode = fetch_inode(free_i, disk_ptr);
     printf("attampted to fetch inode to verify - inum: %d\n", test_inode.num);
     printf("attempted to fetch inode to verify - atime: %ld\n", test_inode.atim);
@@ -288,7 +298,7 @@ struct wfs_dentry* alloc_datablock(void *disk_ptr) {
     }
     printf("found free datablock space: %d\n", free_d);
     dbitmap[free_d / 8] |= (1 << (free_d % 8));
-    memcpy((void*)d_bitmap_ptr, &dbitmap, dblocksize);
+    memcpy_v((void*)d_bitmap_ptr, &dbitmap, dblocksize);
 
     i = 0;
     while (i != free_d) {
@@ -327,14 +337,14 @@ int free_dentry(int inum, int t_inum, void *disk_ptr) {
                     dentry.num = -1;
                     inode.size -= sizeof(dentry);
                 }
-                memcpy((void*)ptr, &dentry, sizeof(struct wfs_dentry));
+                memcpy_v((void*)ptr, &dentry, sizeof(struct wfs_dentry));
                 return 1;
             }
         }
         i++;
     }
     inode.mtim = time(NULL);
-    memcpy((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
+    memcpy_v((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
     return 0;
 }
 
@@ -374,11 +384,11 @@ int free_data(int inum, const char *name, void *disk_ptr) {
             for (off_t ptr = start; ptr < start + BLOCK_SIZE; ptr += sizeof(struct wfs_dentry)) {
                 memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
                 dentry.num = -1;
-                memcpy((void*)ptr, &dentry, sizeof(struct wfs_dentry));
+                memcpy_v((void*)ptr, &dentry, sizeof(struct wfs_dentry));
                 return 1;
             }
             dbitmap[dnum / 8] &= ~(1 << (dnum % 8));
-            memcpy((void*)d_bitmap_ptr, &dbitmap, dblocksize);
+            memcpy_v((void*)d_bitmap_ptr, &dbitmap, dblocksize);
         }
         i++;
     }
@@ -386,8 +396,8 @@ int free_data(int inum, const char *name, void *disk_ptr) {
     // clear inode
     inode.num = -1;
     inodebitmap[inum / 8] &= ~(1 << (inum % 8));
-    memcpy((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
-    memcpy((void*)i_bitmap_ptr, &inodebitmap, inodesize);
+    memcpy_v((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
+    memcpy_v((void*)i_bitmap_ptr, &inodebitmap, inodesize);
     return 0;
 }
 
@@ -434,7 +444,7 @@ struct wfs_dentry* fetch_available_block(int inum, void *disk_ptr) {
             new_dnum = (((off_t)new_dentry - d_blocks_ptr) / BLOCK_SIZE);
             printf("calculated dnum %d\n", new_dnum);
             inode.blocks[i] = new_dnum;
-            memcpy((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
+            memcpy_v((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
             return new_dentry;
         }
         i++;
@@ -507,12 +517,12 @@ int write_blocks(int inum, const char *buffer, size_t size, off_t offset, void *
         if (dnum != -1) {
             b_ptr = d_blocks_ptr + (dnum * BLOCK_SIZE);
             if (size > BLOCK_SIZE) {
-                memcpy((void*)b_ptr, buffer + bytes_written, BLOCK_SIZE);
+                memcpy_v((void*)b_ptr, (void*)(buffer + bytes_written), BLOCK_SIZE);
                 bytes_written += BLOCK_SIZE;
                 size -= BLOCK_SIZE;
             }
             else if (size > 0 && size < BLOCK_SIZE) {
-                memcpy((void*)b_ptr, buffer + bytes_written, size);
+                memcpy_v((void*)b_ptr, (void*)(buffer + bytes_written), size);
                 size = 0;
             }
             if (size == 0) {
@@ -523,7 +533,7 @@ int write_blocks(int inum, const char *buffer, size_t size, off_t offset, void *
     }
     inode.mtim = time(NULL);
     inode.size += bytes_written;
-    memcpy((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
+    memcpy_v((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
     return 0;
 }
 
@@ -645,8 +655,8 @@ static int wfs_mknod(const char *path, mode_t mode, dev_t rdev) {
     p_inode.size += sizeof(new_dentry);
     p_inode.mtim = time(NULL);
     p_inode.nlinks++;
-    memcpy((void*)(i_blocks_ptr + (p_inum * BLOCK_SIZE)), &p_inode, sizeof(struct wfs_inode));
-    memcpy(block_ptr, &new_dentry, sizeof(struct wfs_dentry));
+    memcpy_v((void*)(i_blocks_ptr + (p_inum * BLOCK_SIZE)), &p_inode, sizeof(struct wfs_inode));
+    memcpy_v(block_ptr, &new_dentry, sizeof(struct wfs_dentry));
     printf("dentry updated\n");
     return 0;
 }
@@ -697,12 +707,12 @@ static int wfs_mkdir(const char *path, mode_t mode) {
     p_inode.size += sizeof(new_dentry);
     p_inode.mtim = time(NULL);
     p_inode.nlinks++;
-    memcpy((void*)(i_blocks_ptr + (p_inum * BLOCK_SIZE)), &p_inode, sizeof(struct wfs_inode));
+    memcpy_v((void*)(i_blocks_ptr + (p_inum * BLOCK_SIZE)), &p_inode, sizeof(struct wfs_inode));
     p_inode = fetch_inode(p_inum, curr_disk);
     for (int j = 0; j < N_BLOCKS; j++) {
         printf("p_inode block: %ld\n", p_inode.blocks[j]);
     }
-    memcpy(block_ptr, &new_dentry, sizeof(struct wfs_dentry));
+    memcpy_v(block_ptr, &new_dentry, sizeof(struct wfs_dentry));
     printf("dentry updated\n");
 
     return 0;
@@ -929,6 +939,7 @@ int main(int argc, char *argv[]) {
             total_disks = sb.num_disks;
             raid = sb.raid;
             disk_ptrs = malloc(total_disks * sizeof(void*));
+            disk_sizes = malloc(total_disks * sizeof(size_t));
             if (dcnt != total_disks) {
                 close(fd);
                 freev((void*)disks, ndisks, 1);
@@ -937,6 +948,10 @@ int main(int argc, char *argv[]) {
             }
         }
         disk_ptrs[i] = disk_ptr;
+        struct stat st;
+        fstat(fd, &st);
+        disk_sizes[i] = st.st_size;
+
         close(fd);
     }
 
