@@ -387,7 +387,7 @@ struct wfs_dentry* fetch_available_block(int inum, void *disk_ptr) {
     return 0;
 }
 
-int read_blocks(int inum, char *buffer, size_t size, off_t offset, void *disk_ptr) {
+int read_blocks(int inum, const char *buffer, size_t size, off_t offset, void *disk_ptr) {
     struct wfs_inode inode;
     struct wfs_sb sb;
     off_t d_blocks_ptr, b_ptr;
@@ -411,12 +411,12 @@ int read_blocks(int inum, char *buffer, size_t size, off_t offset, void *disk_pt
 
         b_ptr = d_blocks_ptr + (dnum * BLOCK_SIZE);
         if (size > BLOCK_SIZE) {
-            memcpy(buffer + bytes_read, (void*)b_ptr, BLOCK_SIZE);
+            memcpy((void*)(buffer + bytes_read), (void*)b_ptr, BLOCK_SIZE);
             bytes_read += BLOCK_SIZE;
             size -= BLOCK_SIZE;
         }
         else if (size > 0 && size < BLOCK_SIZE) {
-            memcpy(buffer + bytes_read, (void*)b_ptr, size);
+            memcpy((void*)(buffer + bytes_read), (void*)b_ptr, size);
             size = 0;
         }
         if (size == 0) {
@@ -427,7 +427,47 @@ int read_blocks(int inum, char *buffer, size_t size, off_t offset, void *disk_pt
     return 0;
 }
 
-int read_dentries(int inum, char *buffer, fuse_fill_dir_t filler, off_t offset, void *disk_ptr) {
+int write_blocks(int inum, const char *buffer, size_t size, off_t offset, void *disk_ptr) {
+    struct wfs_inode inode;
+    struct wfs_sb sb;
+    off_t d_blocks_ptr, b_ptr;
+    size_t bytes_written;
+    int dnum;
+    int i;
+
+    memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
+    d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr + offset;
+    inode = fetch_inode(inum, disk_ptr);
+    if ((inode.mode & S_IFMT) != S_IFREG) {
+        return 0;
+    }
+
+    i = 0;
+    bytes_written = 0;
+    while (i < N_BLOCKS) {
+        dnum = inode.blocks[i];
+        if (dnum == -1)
+            continue;
+
+        b_ptr = d_blocks_ptr + (dnum * BLOCK_SIZE);
+        if (size > BLOCK_SIZE) {
+            memcpy((void*)b_ptr, buffer + bytes_written, BLOCK_SIZE);
+            bytes_written += BLOCK_SIZE;
+            size -= BLOCK_SIZE;
+        }
+        else if (size > 0 && size < BLOCK_SIZE) {
+            memcpy((void*)b_ptr, buffer + bytes_written, size);
+            size = 0;
+        }
+        if (size == 0) {
+            return 1;
+        }
+        i++;
+    }
+    return 0;
+}
+
+int read_dentries(int inum, char *buffer, fuse_fill_dir_t filler, void *disk_ptr) {
     struct wfs_inode inode;
     struct wfs_sb sb;
     struct wfs_dentry dentry;
@@ -453,10 +493,12 @@ int read_dentries(int inum, char *buffer, fuse_fill_dir_t filler, off_t offset, 
             if (dentry.num == -1)
                 continue;
 
-            filler(buffer, dentry.name, NULL, offset);
+            filler(buffer, dentry.name, NULL, 0);
         }
         i++;
     }
+    filler(buffer, ".", NULL, 0);
+    filler(buffer, "..", NULL, 0);
     return 1;
 }
 
@@ -629,7 +671,7 @@ static int wfs_rmdir(const char *path) {
 static int wfs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info* fi) {
     int inum;
     void *curr_disk;
-    mode_t dir_mode = S_IFDIR;
+    mode_t file_mode = S_IFREG;
 
     if (path == NULL || strlen(path) == 0) {
         return -ENOENT;
@@ -641,7 +683,7 @@ static int wfs_read(const char *path, char *buf, size_t size, off_t offset, stru
 
         case RAID_1:
             curr_disk = disk_ptrs[0];
-            if ((inum = validatepath(path, dir_mode, curr_disk)) == -1) {
+            if ((inum = validatepath(path, file_mode, curr_disk)) == -1) {
                 return -ENOENT;
             }
             if (read_blocks(inum, buf, size, offset, curr_disk) != 1) {
@@ -656,6 +698,10 @@ static int wfs_read(const char *path, char *buf, size_t size, off_t offset, stru
 }
 
 static int wfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info* fi) {
+    int inum;
+    void *curr_disk;
+    mode_t file_mode = S_IFREG;
+
     if (path == NULL || strlen(path) == 0) {
         return -ENOENT;
     }
@@ -665,6 +711,13 @@ static int wfs_write(const char *path, const char *buf, size_t size, off_t offse
             break;
 
         case RAID_1:
+            curr_disk = disk_ptrs[0];
+            if ((inum = validatepath(path, file_mode, curr_disk)) == -1) {
+                return -ENOENT;
+            }
+            if (write_blocks(inum, buf, size, offset, curr_disk) != 1) {
+                return -ENOENT;
+            }
             break;
 
         case RAID_1v:
@@ -691,7 +744,7 @@ static int wfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_
             if ((inum = validatepath(path, dir_mode, curr_disk)) == -1) {
                 return -ENOENT;
             }
-            if (read_dentries(inum, buf, filler, offset, curr_disk) != 1) {
+            if (read_dentries(inum, buf, filler, curr_disk) != 1) {
                 return -ENOENT;
             }
             break;
