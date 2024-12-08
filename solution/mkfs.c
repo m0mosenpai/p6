@@ -116,7 +116,7 @@ int main(int argc, char *argv[]) {
         inodesize = roundup(inodes, 8) / 8;
         unsigned char inodebitmap[inodesize];
         memset(inodebitmap, 0, inodesize);
-        inodebitmap[0] = 1;
+        inodebitmap[0 / 8] |= (1 << (0 % 8));
 
         // init data bitmap
         dblocksize = roundup(blocks, 8) / 8;
