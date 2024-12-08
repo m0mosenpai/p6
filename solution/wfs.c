@@ -241,15 +241,13 @@ struct wfs_dentry* alloc_datablock(void *disk_ptr) {
     d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr;
     memcpy(&dbitmap, (void*)d_bitmap_ptr, dblocksize);
 
-    i = 0;
-    while (i < dblocksize && dbitmap[i] == 1) {
-        i++;
+    for (i = 0; i < sb.num_data_blocks; i++) {
+        if ((dbitmap[i / 8] & (1 << (i % 8))) == 0) {
+            free_d = i;
+            break;
+        }
     }
-    if (i >= dblocksize) {
-        return 0;
-    }
-    free_d = i;
-    dbitmap[free_d] = 1;
+    dbitmap[free_d / 8] |= (1 << (free_d % 8));
     memcpy((void*)d_bitmap_ptr, &dbitmap, dblocksize);
     while (i != free_d) {
         d_blocks_ptr += BLOCK_SIZE;
@@ -333,7 +331,7 @@ int free_data(int inum, const char *name, void *disk_ptr) {
                 memcpy((void*)ptr, &dentry, sizeof(struct wfs_dentry));
                 return 1;
             }
-            dbitmap[dnum] = 0;
+            dbitmap[dnum / 8] &= ~(1 << (dnum % 8));
             memcpy((void*)d_bitmap_ptr, &dbitmap, dblocksize);
         }
         i++;
