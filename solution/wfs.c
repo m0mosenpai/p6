@@ -48,43 +48,73 @@ int validatedisk(struct wfs_sb sb) {
     return 0;
 }
 
+int mirror_data(void *maindisk, void *src, size_t size) {
+    for (int i = 1; i < total_disks; i++) {
+        memcpy((void*)((off_t)disk_ptrs[i] + (off_t)src), (void*)((off_t)maindisk + (off_t)src), size);
+    }
+    return 1;
+}
+
+void memcpy_v(void *dst, void *src, size_t size) {
+    memcpy(dst, src, size);
+    switch(raid) {
+        case RAID_0:
+            break;
+        default:
+            mirror_data(disk_ptrs[0], src, size);
+            break;
+    }
+}
+
+struct wfs_inode fetch_inode(int inum, void *disk_ptr) {
+    struct wfs_sb sb;
+    struct wfs_inode inode;
+    off_t i_blocks_ptr;
+
+    memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
+    i_blocks_ptr = (off_t)disk_ptr + sb.i_blocks_ptr;
+    memcpy(&inode, (void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), sizeof(struct wfs_inode));
+    inode.atim = time(NULL);
+    memcpy((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
+    return inode;
+}
+
 int validatepath(const char* path, mode_t mode, void *disk_ptr) {
     printf("in validatepath with path: %s\n", path);
     struct wfs_sb sb;
     struct wfs_inode inode;
     struct wfs_dentry dentry;
-    off_t i_blocks_ptr;
     off_t d_blocks_ptr;
-    off_t blocks[N_BLOCKS];
     int inum;
     int dnum;
     int found;
 
     memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
-    i_blocks_ptr = (off_t)disk_ptr + sb.i_blocks_ptr;
     d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr;
 
     char *delim = "/";
     char *path_cpy = strdup(path);
     char *tok = strtok(path_cpy, delim);
+    printf("path token (before loop): %s\n", tok);
     inum = 0;
 
     while (tok != NULL) {
         printf("path token: %s\n", tok);
-        memcpy(&inode, (void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), sizeof(struct wfs_inode));
+        inode = fetch_inode(inum, disk_ptr);
         if (mode != 0 && (inode.mode & S_IFMT) != mode) {
             printf("incorrect mode!\n");
             return -1;
         }
-        memcpy(blocks, inode.blocks, sizeof(inode.blocks));
         inode.atim = time(NULL);
         found = 0;
         for (int i = 0; i < N_BLOCKS; i++) {
-            dnum = blocks[i];
+            dnum = inode.blocks[i];
             if (dnum == -1)
                 continue;
 
-            for (off_t ptr = d_blocks_ptr + (dnum * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
+            printf("block: %d, dnum: %d\n", i, dnum);
+            off_t start = d_blocks_ptr + (dnum * BLOCK_SIZE);
+            for (off_t ptr = start; ptr < start + BLOCK_SIZE; ptr += sizeof(struct wfs_dentry)) {
                 memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
                 printf("checking dentry %p in dnum %d -> name: %s, num: %d\n", (void*)ptr, dnum, dentry.name, dentry.num);
                 if (strcmp(dentry.name, tok) == 0 && dentry.num != -1) {
@@ -99,7 +129,7 @@ int validatepath(const char* path, mode_t mode, void *disk_ptr) {
             }
         }
         if (!found) {
-            printf("%d inode not found!\n", inum);
+            printf("no dentry found!\n");
             return -1;
         }
         tok = strtok(NULL, delim);
@@ -135,18 +165,6 @@ const char* getname(const char *path) {
     return name;
 }
 
-struct wfs_inode fetch_inode(int inum, void *disk_ptr) {
-    struct wfs_sb sb;
-    struct wfs_inode inode;
-    off_t i_blocks_ptr;
-
-    memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
-    i_blocks_ptr = (off_t)disk_ptr + sb.i_blocks_ptr;
-    memcpy(&inode, (void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), sizeof(struct wfs_inode));
-    inode.atim = time(NULL);
-    memcpy((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
-    return inode;
-}
 
 struct wfs_dentry fetch_block(int dnum, void *disk_ptr) {
     struct wfs_sb sb;
@@ -177,7 +195,8 @@ int data_exists(const char* name, mode_t mode, int inum, void *disk_ptr) {
         dnum = inode.blocks[i];
         printf("Checking dnum %d: %d\n", i, dnum);
         if (dnum != -1) {
-            for (off_t ptr = d_blocks_ptr + (dnum * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
+            off_t start = d_blocks_ptr + (dnum * BLOCK_SIZE);
+            for (off_t ptr = start; ptr < start + BLOCK_SIZE; ptr += sizeof(struct wfs_dentry)) {
                 memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
                 printf("checking existing data with name %s: found %s\n", name, dentry.name);
                 if (strcmp(dentry.name, name) == 0 && (inode.mode & S_IFMT) == mode) {
@@ -230,7 +249,7 @@ struct wfs_inode* alloc_inode(void *disk_ptr, mode_t mode) {
         .uid = getuid(),
         .gid = getgid(),
         .size = 0,
-        .nlinks = 1,
+        .nlinks = 2,
         .atim = ctime,
         .mtim = ctime,
         .ctim = ctime,
@@ -276,14 +295,8 @@ struct wfs_dentry* alloc_datablock(void *disk_ptr) {
         d_blocks_ptr += BLOCK_SIZE;
         i++;
     }
-
-    struct wfs_dentry dentry = {
-        .name = "",
-        .num = -1
-    };
-    for (i = 0; i < dentries; i++) {
-        memcpy((struct wfs_dentry*)d_blocks_ptr + i*sizeof(dentry), &dentry, sizeof(dentry));
-    }
+    printf("shifted d_blocks_ptr by %d\n",i);
+    memset((void*)d_blocks_ptr, -1, BLOCK_SIZE);
     printf("free space for datablock at addr %p\n", (void*)d_blocks_ptr);
     return (struct wfs_dentry*)d_blocks_ptr;
 }
@@ -307,7 +320,8 @@ int free_dentry(int inum, int t_inum, void *disk_ptr) {
     while (i < N_BLOCKS) {
         dnum = inode.blocks[i];
         if (dnum != -1) {
-            for (off_t ptr = d_blocks_ptr + (dnum * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
+            off_t start = d_blocks_ptr + (dnum * BLOCK_SIZE);
+            for (off_t ptr = start; ptr < start + BLOCK_SIZE; ptr += sizeof(struct wfs_dentry)) {
                 memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
                 if (dentry.num == t_inum) {
                     dentry.num = -1;
@@ -356,7 +370,8 @@ int free_data(int inum, const char *name, void *disk_ptr) {
     while (i < N_BLOCKS) {
         dnum = inode.blocks[i];
         if (dnum != -1) {
-            for (off_t ptr = d_blocks_ptr + (dnum * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
+            off_t start = d_blocks_ptr + (dnum * BLOCK_SIZE);
+            for (off_t ptr = start; ptr < start + BLOCK_SIZE; ptr += sizeof(struct wfs_dentry)) {
                 memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
                 dentry.num = -1;
                 memcpy((void*)ptr, &dentry, sizeof(struct wfs_dentry));
@@ -398,7 +413,8 @@ struct wfs_dentry* fetch_available_block(int inum, void *disk_ptr) {
     while (i < N_BLOCKS) {
         dnum = inode.blocks[i];
         if (dnum != -1) {
-            for (off_t ptr = d_blocks_ptr + (dnum * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
+            off_t start = d_blocks_ptr + (dnum * BLOCK_SIZE);
+            for (off_t ptr = start; ptr < start + BLOCK_SIZE; ptr += sizeof(struct wfs_dentry)) {
                 memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
                 if (dentry.num == -1) {
                     return (struct wfs_dentry*)ptr;
@@ -412,10 +428,10 @@ struct wfs_dentry* fetch_available_block(int inum, void *disk_ptr) {
     while (i < N_BLOCKS) {
         if (inode.blocks[i] == -1) {
             new_dentry = alloc_datablock(disk_ptr);
-            d_blocks_ptr = (off_t)disk_ptr + sb.i_blocks_ptr;
+            d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr;
             printf("new datablock allocated at addr %p\n", (void*)new_dentry);
             printf("datablock starts at addr %p\n", (void*)d_blocks_ptr);
-            new_dnum = (((off_t)new_dentry - d_blocks_ptr) / BLOCK_SIZE) - sizeof(struct wfs_dentry);
+            new_dnum = (((off_t)new_dentry - d_blocks_ptr) / BLOCK_SIZE);
             printf("calculated dnum %d\n", new_dnum);
             inode.blocks[i] = new_dnum;
             memcpy((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
@@ -531,11 +547,13 @@ int read_dentries(int inum, char *buffer, fuse_fill_dir_t filler, void *disk_ptr
     while (i < N_BLOCKS) {
         dnum = inode.blocks[i];
         if (dnum != -1) {
-            for (off_t ptr = d_blocks_ptr + (dnum * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
+            off_t start = d_blocks_ptr + (dnum * BLOCK_SIZE);
+            for (off_t ptr = start; ptr < start + BLOCK_SIZE; ptr += sizeof(struct wfs_dentry)) {
                 memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
                 if (dentry.num == -1)
                     continue;
 
+                printf("=======> filling with name: %s\n", dentry.name);
                 filler(buffer, dentry.name, NULL, 0);
             }
         }
@@ -559,10 +577,12 @@ static int wfs_getattr(const char *path, struct stat *stbuf) {
             break;
 
         case RAID_1:
+            printf("checking for path: %s\n", path);
             curr_disk = disk_ptrs[0];
             if ((inum = validatepath(path, 0, curr_disk)) == -1) {
                 return -ENOENT;
             }
+            printf("inum in getattr: %d\n", inum);
             inode = fetch_inode(inum, curr_disk);
             stbuf->st_uid = inode.uid;
             stbuf->st_gid = inode.gid;
@@ -632,7 +652,7 @@ static int wfs_mknod(const char *path, mode_t mode, dev_t rdev) {
 }
 
 static int wfs_mkdir(const char *path, mode_t mode) {
-    printf("inside mkdir\n");
+    printf("****** inside mkdir *******\n");
     int p_inum;
     void *curr_disk;
     const char *name;
@@ -678,6 +698,10 @@ static int wfs_mkdir(const char *path, mode_t mode) {
     p_inode.mtim = time(NULL);
     p_inode.nlinks++;
     memcpy((void*)(i_blocks_ptr + (p_inum * BLOCK_SIZE)), &p_inode, sizeof(struct wfs_inode));
+    p_inode = fetch_inode(p_inum, curr_disk);
+    for (int j = 0; j < N_BLOCKS; j++) {
+        printf("p_inode block: %ld\n", p_inode.blocks[j]);
+    }
     memcpy(block_ptr, &new_dentry, sizeof(struct wfs_dentry));
     printf("dentry updated\n");
 
