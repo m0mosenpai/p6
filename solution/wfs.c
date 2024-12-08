@@ -151,6 +151,7 @@ struct wfs_dentry fetch_block(int dnum, void *disk_ptr) {
 }
 
 int data_exists(const char* name, mode_t mode, int inum, void *disk_ptr) {
+    printf("inside data_exists\n");
     struct wfs_sb sb;
     struct wfs_inode inode;
     struct wfs_dentry dentry;
@@ -165,9 +166,11 @@ int data_exists(const char* name, mode_t mode, int inum, void *disk_ptr) {
     i = 0;
     while (i < N_BLOCKS) {
         dnum = inode.blocks[i];
+        printf("Checking dnum %d: %d\n", i, dnum);
         if (dnum != -1) {
             for (off_t ptr = d_blocks_ptr + (dnum * BLOCK_SIZE); ptr < dentries; ptr += sizeof(struct wfs_dentry)) {
                 memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
+                printf("checking existing data with name %s: found %s\n", name, dentry.name);
                 if (strcmp(dentry.name, name) == 0 && (inode.mode & S_IFMT) == mode) {
                     return dnum;
                 }
@@ -179,6 +182,7 @@ int data_exists(const char* name, mode_t mode, int inum, void *disk_ptr) {
 }
 
 struct wfs_inode* alloc_inode(void *disk_ptr, mode_t mode) {
+    printf("in alloc_inode\n");
     struct wfs_sb sb;
     off_t i_bitmap_ptr;
     off_t i_blocks_ptr;
@@ -222,12 +226,18 @@ struct wfs_inode* alloc_inode(void *disk_ptr, mode_t mode) {
         .mtim = ctime,
         .ctim = ctime,
     };
+    printf("inode inum: %d\n", new_inode.num);
+    printf("inode time: %ld\n", new_inode.atim);
     memset(new_inode.blocks, -1, N_BLOCKS*(sizeof(off_t)));
     memcpy((void*)i_blocks_ptr, &new_inode, sizeof(struct wfs_inode));
+    struct wfs_inode test_inode = fetch_inode(free_i, disk_ptr);
+    printf("attampted to fetch inode to verify - inum: %d\n", test_inode.num);
+    printf("attempted to fetch inode to verify - atime: %ld\n", test_inode.atim);
     return (struct wfs_inode*)i_blocks_ptr;
 }
 
 struct wfs_dentry* alloc_datablock(void *disk_ptr) {
+    printf("in alloc_datablock\n");
     struct wfs_sb sb;
     off_t d_bitmap_ptr;
     off_t d_blocks_ptr;
@@ -248,8 +258,11 @@ struct wfs_dentry* alloc_datablock(void *disk_ptr) {
             break;
         }
     }
+    printf("found free datablock space: %d\n", free_d);
     dbitmap[free_d / 8] |= (1 << (free_d % 8));
     memcpy((void*)d_bitmap_ptr, &dbitmap, dblocksize);
+
+    i = 0;
     while (i != free_d) {
         d_blocks_ptr += BLOCK_SIZE;
         i++;
@@ -262,6 +275,7 @@ struct wfs_dentry* alloc_datablock(void *disk_ptr) {
     for (i = 0; i < dentries; i++) {
         memcpy((struct wfs_dentry*)d_blocks_ptr + i*sizeof(dentry), &dentry, sizeof(dentry));
     }
+    printf("free space for datablock at addr %p\n", (void*)d_blocks_ptr);
     return (struct wfs_dentry*)d_blocks_ptr;
 }
 
@@ -352,14 +366,19 @@ int free_data(int inum, const char *name, void *disk_ptr) {
 }
 
 struct wfs_dentry* fetch_available_block(int inum, void *disk_ptr) {
+    printf("in fetch_available_block\n");
     struct wfs_inode inode;
     struct wfs_sb sb;
     struct wfs_dentry dentry;
+    struct wfs_dentry *new_dentry;
+    off_t i_blocks_ptr;
     off_t d_blocks_ptr;
     int dnum;
+    int new_dnum;
     int i;
 
     memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
+    i_blocks_ptr = (off_t)disk_ptr + sb.i_blocks_ptr;
     d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr;
     inode = fetch_inode(inum, disk_ptr);
 
@@ -381,7 +400,15 @@ struct wfs_dentry* fetch_available_block(int inum, void *disk_ptr) {
     i = 0;
     while (i < N_BLOCKS) {
         if (inode.blocks[i] == -1) {
-            return alloc_datablock(disk_ptr);
+            new_dentry = alloc_datablock(disk_ptr);
+            d_blocks_ptr = (off_t)disk_ptr + sb.i_blocks_ptr;
+            printf("new datablock allocated at addr %p\n", (void*)new_dentry);
+            printf("datablock starts at addr %p\n", (void*)d_blocks_ptr);
+            new_dnum = (((off_t)new_dentry - d_blocks_ptr) / BLOCK_SIZE) - sizeof(struct wfs_dentry);
+            printf("calculated dnum %d\n", new_dnum);
+            inode.blocks[i] = new_dnum;
+            memcpy((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
+            return new_dentry;
         }
         i++;
     }
