@@ -346,7 +346,7 @@ int free_data(int inum, const char *name, void *disk_ptr) {
     // clear inode
     inode.num = -1;
     inodebitmap[inum] = 0;
-    memcpy((void*)i_blocks_ptr + (inum * BLOCK_SIZE), &inode, sizeof(struct wfs_inode));
+    memcpy((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
     memcpy((void*)i_bitmap_ptr, &inodebitmap, inodesize);
     return 0;
 }
@@ -390,7 +390,6 @@ struct wfs_dentry* fetch_available_block(int inum, void *disk_ptr) {
 int read_blocks(int inum, char *buffer, size_t size, off_t offset, void *disk_ptr) {
     struct wfs_inode inode;
     struct wfs_sb sb;
-    struct wfs_dentry dentry;
     off_t d_blocks_ptr, b_ptr;
     size_t bytes_read;
     int dnum;
@@ -432,13 +431,12 @@ int read_dentries(int inum, char *buffer, fuse_fill_dir_t filler, off_t offset, 
     struct wfs_inode inode;
     struct wfs_sb sb;
     struct wfs_dentry dentry;
-    off_t d_blocks_ptr, b_ptr;
-    size_t bytes_read;
+    off_t d_blocks_ptr;
     int dnum;
     int i;
 
     memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
-    d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr + offset;
+    d_blocks_ptr = (off_t)disk_ptr + sb.d_blocks_ptr;
     inode = fetch_inode(inum, disk_ptr);
     if ((inode.mode & S_IFMT) != S_IFDIR) {
         return 0;
@@ -455,7 +453,7 @@ int read_dentries(int inum, char *buffer, fuse_fill_dir_t filler, off_t offset, 
             if (dentry.num == -1)
                 continue;
 
-            filler(buffer, dentry.name, NULL, NULL);
+            filler(buffer, dentry.name, NULL, offset);
         }
         i++;
     }
@@ -463,7 +461,6 @@ int read_dentries(int inum, char *buffer, fuse_fill_dir_t filler, off_t offset, 
 }
 
 static int wfs_getattr(const char *path, struct stat *stbuf) {
-    int i;
     void *disk;
     struct wfs_sb sb;
     struct wfs_inode inode;
@@ -659,9 +656,6 @@ static int wfs_read(const char *path, char *buf, size_t size, off_t offset, stru
 }
 
 static int wfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info* fi) {
-    int i;
-    void *curr_disk;
-
     if (path == NULL || strlen(path) == 0) {
         return -ENOENT;
     }
@@ -671,9 +665,6 @@ static int wfs_write(const char *path, const char *buf, size_t size, off_t offse
             break;
 
         case RAID_1:
-            curr_disk = disk_ptrs[0];
-            for (i = 1; i < total_disks; i++) {
-            }
             break;
 
         case RAID_1v:
