@@ -62,9 +62,7 @@ int raid0_offset(int dnum) {
 }
 
 /*int mirror_data(void *maindisk, void *src, size_t size) {*/
-/*    printf("===============> Copying to other disks\n");*/
 /*    for (int i = 1; i < total_disks; i++) {*/
-/*        printf("===============> DISK: %d\n", i+1);*/
 /*        memcpy((void*)((off_t)disk_ptrs[i] + (off_t)src - (off_t)maindisk), src, size);*/
 /*    }*/
 /*    return 1;*/
@@ -178,8 +176,13 @@ const char* getname(const char *path) {
 }
 
 int isdirempty(int inum, void *disk_ptr) {
+    printf("[DEBUG] inside isdirempty\n");
     struct wfs_sb sb;
     struct wfs_inode inode;
+    struct wfs_dentry dentry;
+    off_t d_blocks_ptr;
+    int blk;
+    int dnum;
     int i;
 
     memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
@@ -187,11 +190,22 @@ int isdirempty(int inum, void *disk_ptr) {
 
     i = 0;
     while (i < N_BLOCKS) {
-        if (inode.blocks[i] != -1) {
-            return 0;
+        blk = inode.blocks[i];
+        if (blk != -1) {
+            dnum = raid0_offset(blk);
+            d_blocks_ptr = (off_t)disk_ptrs[raid0_disk(blk)] + sb.d_blocks_ptr;
+            off_t start = d_blocks_ptr + (dnum * BLOCK_SIZE);
+            for (off_t ptr = start; ptr < start + BLOCK_SIZE; ptr += sizeof(struct wfs_dentry)) {
+                memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
+                if (dentry.num != -1) {
+                    printf("[DEBUG] directory not empty\n");
+                    return 0;
+                }
+            }
         }
         i++;
     }
+    printf("[DEBUG] directory is empty\n");
     return 1;
 }
 
@@ -340,7 +354,7 @@ struct wfs_dentry* alloc_datablock(void *disk_ptr, int *idx) {
     return (struct wfs_dentry*)d_blocks_ptr;
 }
 
-int free_dentry(int inum, int t_inum, void *disk_ptr) {
+int free_dentry(int p_inum, int c_inum, void *disk_ptr) {
     printf("[DEBUG] in free_dentry\n");
     struct wfs_inode inode;
     struct wfs_sb sb;
@@ -353,7 +367,7 @@ int free_dentry(int inum, int t_inum, void *disk_ptr) {
 
     memcpy(&sb, disk_ptr, sizeof(struct wfs_sb));
     i_blocks_ptr = (off_t)disk_ptr + sb.i_blocks_ptr;
-    inode = fetch_inode(inum, disk_ptr);
+    inode = fetch_inode(p_inum, disk_ptr);
 
     i = 0;
     while (i < N_BLOCKS) {
@@ -364,20 +378,20 @@ int free_dentry(int inum, int t_inum, void *disk_ptr) {
             off_t start = d_blocks_ptr + (dnum * BLOCK_SIZE);
             for (off_t ptr = start; ptr < start + BLOCK_SIZE; ptr += sizeof(struct wfs_dentry)) {
                 memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
-                if (dentry.num == t_inum) {
+                if (dentry.num == c_inum) {
                     dentry.num = -1;
                     inode.size -= sizeof(dentry);
+                    memcpy_v((void*)ptr, &dentry, sizeof(struct wfs_dentry));
+                    printf("[DEBUG] successfully freed dentry with inum %d\n", c_inum);
+                    return 1;
                 }
-                memcpy_v((void*)ptr, &dentry, sizeof(struct wfs_dentry));
-                printf("[DEBUG] successfully freed dentry with inum %d\n", t_inum);
-                return 1;
             }
         }
         i++;
     }
     inode.mtim = time(NULL);
-    memcpy_v((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
-    printf("[DEBUG] no dentry found with inum %d\n", t_inum);
+    memcpy_v((void*)(i_blocks_ptr + (p_inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
+    printf("[DEBUG] no dentry found with inum %d\n", c_inum);
     return 0;
 }
 
@@ -423,13 +437,14 @@ void free_datablock(int dnum, void* disk_ptr) {
 
 int free_dir(int inum, int p_inum, const char *name, void *disk_ptr) {
     printf("[DEBUG] inside free_dir \n");
-    // clear inode
-    free_inode(inum, disk_ptr);
 
     // clear dentry in parent
     if (free_dentry(p_inum, inum, disk_ptr) != 1) {
         return 0;
     }
+    // clear inode
+    free_inode(inum, disk_ptr);
+
     return 1;
     printf("[DEBUG] successfully freed directory entry of %d from %d\n", inum, p_inum);
 }
@@ -448,8 +463,10 @@ int free_file(int inum, int p_inum, const char *name, void *disk_ptr) {
     i_blocks_ptr = (off_t)disk_ptr + sb.i_blocks_ptr;
     inode = fetch_inode(inum, disk_ptr);
 
-    // clear inode
-    free_inode(inum, disk_ptr);
+    // clear dentry in parent
+    if (free_dentry(p_inum, inum, disk_ptr) != 1) {
+        return 0;
+    }
 
     // clear file data
     i = 0;
@@ -464,10 +481,9 @@ int free_file(int inum, int p_inum, const char *name, void *disk_ptr) {
     }
     memcpy_v((void*)(i_blocks_ptr + (inum * BLOCK_SIZE)), &inode, sizeof(struct wfs_inode));
 
-    // clear dentry in parent
-    if (free_dentry(p_inum, inum, disk_ptr) != 1) {
-        return 0;
-    }
+    // clear inode
+    free_inode(inum, disk_ptr);
+
     printf("[DEBUG] successfully freed file with inum %d\n", inum);
     return 1;
 }
@@ -652,9 +668,9 @@ int read_dentries(int inum, char *buffer, fuse_fill_dir_t filler, void *disk_ptr
             off_t start = d_blocks_ptr + (dnum * BLOCK_SIZE);
             for (off_t ptr = start; ptr < start + BLOCK_SIZE; ptr += sizeof(struct wfs_dentry)) {
                 memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
-                if (dentry.num == -1)
-                    continue;
-                filler(buffer, dentry.name, NULL, 0);
+                if (dentry.num != -1) {
+                    filler(buffer, dentry.name, NULL, 0);
+                }
             }
         }
         i++;
@@ -724,7 +740,6 @@ static int wfs_mknod(const char *path, mode_t mode, dev_t rdev) {
         return -ENOSPC;
     };
     if ((block_ptr = fetch_available_block(p_inum, curr_disk)) == 0) {
-        printf("no free block available\n");
         return -ENOSPC;
     }
     struct wfs_dentry new_dentry = {
