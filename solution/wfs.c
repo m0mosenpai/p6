@@ -199,7 +199,7 @@ struct wfs_dentry fetch_block(int dnum, void *disk_ptr) {
     return dentry;
 }
 
-int data_exists(const char* name, mode_t mode, int inum, void *disk_ptr) {
+int data_exists(const char* name, int inum, void *disk_ptr) {
     printf("=========================> inside data_exists\n");
     struct wfs_sb sb;
     struct wfs_inode inode;
@@ -221,7 +221,7 @@ int data_exists(const char* name, mode_t mode, int inum, void *disk_ptr) {
             for (off_t ptr = start; ptr < start + BLOCK_SIZE; ptr += sizeof(struct wfs_dentry)) {
                 memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
                 printf("checking existing data with name %s: found %s\n", name, dentry.name);
-                if (strcmp(dentry.name, name) == 0 && (inode.mode & S_IFMT) == mode) {
+                if (strcmp(dentry.name, name) == 0) {
                     return dnum;
                 }
             }
@@ -232,7 +232,6 @@ int data_exists(const char* name, mode_t mode, int inum, void *disk_ptr) {
 }
 
 struct wfs_inode* alloc_inode(void *disk_ptr, mode_t mode) {
-    printf("============================> in alloc_inode\n");
     struct wfs_sb sb;
     off_t i_bitmap_ptr;
     off_t i_blocks_ptr;
@@ -253,6 +252,9 @@ struct wfs_inode* alloc_inode(void *disk_ptr, mode_t mode) {
             free_i = i;
             break;
         }
+    }
+    if (i >= sb.num_inodes) {
+        return 0;
     }
     inodebitmap[free_i / 8] |= (1 << (free_i % 8));
     memcpy_v((void*)i_bitmap_ptr, &inodebitmap, inodesize);
@@ -281,7 +283,6 @@ struct wfs_inode* alloc_inode(void *disk_ptr, mode_t mode) {
 }
 
 struct wfs_dentry* alloc_datablock(void *disk_ptr) {
-    printf("========================> in alloc_datablock\n");
     struct wfs_sb sb;
     off_t d_bitmap_ptr;
     off_t d_blocks_ptr;
@@ -301,6 +302,9 @@ struct wfs_dentry* alloc_datablock(void *disk_ptr) {
             free_d = i;
             break;
         }
+    }
+    if (i >= sb.num_data_blocks) {
+        return 0;
     }
     dbitmap[free_d / 8] |= (1 << (free_d % 8));
     memcpy_v((void*)d_bitmap_ptr, &dbitmap, dblocksize);
@@ -388,7 +392,6 @@ void free_datablock(int dnum, void* disk_ptr) {
 }
 
 int free_dir(int inum, int p_inum, const char *name, void *disk_ptr) {
-    printf("===================> in free_data\n");
     struct wfs_inode p_inode;
     struct wfs_sb sb;
     struct wfs_dentry dentry;
@@ -424,7 +427,6 @@ int free_dir(int inum, int p_inum, const char *name, void *disk_ptr) {
 
 
 int free_file(int inum, int p_inum, const char *name, void *disk_ptr) {
-    printf("===================> in free_file\n");
     struct wfs_inode inode;
     struct wfs_inode p_inode;
     struct wfs_sb sb;
@@ -624,7 +626,6 @@ int write_blocks(int inum, const char *buffer, size_t size, off_t offset, void *
 }
 
 int read_dentries(int inum, char *buffer, fuse_fill_dir_t filler, void *disk_ptr) {
-    printf("===========> in read_dentries\n");
     struct wfs_inode inode;
     struct wfs_sb sb;
     struct wfs_dentry dentry;
@@ -648,8 +649,6 @@ int read_dentries(int inum, char *buffer, fuse_fill_dir_t filler, void *disk_ptr
                 memcpy(&dentry, (void*)ptr, sizeof(struct wfs_dentry));
                 if (dentry.num == -1)
                     continue;
-
-                printf("=======> filling with name: %s\n", dentry.name);
                 filler(buffer, dentry.name, NULL, 0);
             }
         }
@@ -668,36 +667,24 @@ static int wfs_getattr(const char *path, struct stat *stbuf) {
 
     memset(stbuf, 0, sizeof(struct stat));
 
-    switch (raid) {
-        case RAID_0:
-            break;
-
-        case RAID_1:
-            printf("checking for path: %s\n", path);
-            curr_disk = disk_ptrs[0];
-            if ((inum = validatepath(path, 0, curr_disk)) == -1) {
-                return -ENOENT;
-            }
-            printf("inum in getattr: %d\n", inum);
-            inode = fetch_inode(inum, curr_disk);
-            stbuf->st_uid = inode.uid;
-            stbuf->st_gid = inode.gid;
-            stbuf->st_mode = inode.mode;
-            stbuf->st_size = inode.size;
-            tim.tv_sec = inode.atim;
-            stbuf->st_atim = tim;
-            tim.tv_sec = inode.mtim;
-            stbuf->st_mtim = tim;
-            break;
-
-        case RAID_1v:
-            break;
+    curr_disk = disk_ptrs[0];
+    if ((inum = validatepath(path, 0, curr_disk)) == -1) {
+        return -ENOENT;
     }
+    inode = fetch_inode(inum, curr_disk);
+    stbuf->st_uid = inode.uid;
+    stbuf->st_gid = inode.gid;
+    stbuf->st_mode = inode.mode;
+    stbuf->st_size = inode.size;
+    tim.tv_sec = inode.atim;
+    stbuf->st_atim = tim;
+    tim.tv_sec = inode.mtim;
+    stbuf->st_mtim = tim;
     return 0;
 }
 
 static int wfs_mknod(const char *path, mode_t mode, dev_t rdev) {
-    printf("inside mknod\n");
+    printf("********* inside mknod ***********\n");
     int p_inum;
     void *curr_disk;
     const char *name;
@@ -707,6 +694,7 @@ static int wfs_mknod(const char *path, mode_t mode, dev_t rdev) {
     struct wfs_inode p_inode;
     struct wfs_dentry *block_ptr;
     off_t i_blocks_ptr;
+    /*mode_t dir_mode = mode | S_IFDIR;*/
     mode_t file_mode = mode | S_IFREG;
 
     if (path == NULL || strlen(path) == 0) {
@@ -721,8 +709,12 @@ static int wfs_mknod(const char *path, mode_t mode, dev_t rdev) {
     if ((p_inum = validatepath(parentpath, S_IFDIR, curr_disk)) == -1) {
         return -ENOENT;
     }
+    /*if (!S_ISDIR(mode)) {*/
+    /*    printf("invalid mode!\n");*/
+    /*    return -ENOENT;*/
+    /*}*/
     printf("path validated\n");
-    if (data_exists(name, file_mode, p_inum, curr_disk) != -1) {
+    if (data_exists(name, p_inum, curr_disk) != -1) {
         return -EEXIST;
     }
     printf("file doesn't exist noice\n");
@@ -736,6 +728,7 @@ static int wfs_mknod(const char *path, mode_t mode, dev_t rdev) {
     struct wfs_dentry new_dentry = {
         .num = new_inode->num
     };
+    /*p_inode = fetch_inode(p_inum, curr_disk);*/
     strcpy(new_dentry.name, name);
     p_inode = fetch_inode(p_inum, curr_disk);
     p_inode.size += sizeof(new_dentry);
@@ -773,8 +766,12 @@ static int wfs_mkdir(const char *path, mode_t mode) {
     if ((p_inum = validatepath(parentpath, S_IFDIR, curr_disk)) == -1) {
         return -ENOENT;
     }
+    /*if (!S_ISDIR(dir_mode)) {*/
+    /*    printf("invalid mode!\n");*/
+    /*    return -ENOENT;*/
+    /*}*/
     printf("parent path validated!\n");
-    if (data_exists(name, dir_mode, p_inum, curr_disk) != -1) {
+    if (data_exists(name, p_inum, curr_disk) != -1) {
         return -EEXIST;
     }
     printf("dir doesn't exist noice\n");
@@ -918,7 +915,6 @@ static int wfs_write(const char *path, const char *buf, size_t size, off_t offse
 }
 
 static int wfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi) {
-    printf("inside readdir\n");
     int inum;
     void *curr_disk;
     mode_t dir_mode = S_IFDIR;
