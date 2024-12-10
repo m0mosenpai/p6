@@ -577,7 +577,9 @@ struct wfs_dentry* fetch_available_block(int inum) {
         printf("Block: %d\n", blk);
         if (blk != -1) {
             printf("[DEBUG] found existing datablock\n");
-            return fetch_empty_dentry(blk);
+            if (fetch_empty_dentry(blk) != 0) {
+                return fetch_empty_dentry(blk);
+            }
         }
         i++;
     }
