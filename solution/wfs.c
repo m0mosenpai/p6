@@ -29,6 +29,10 @@ int roundup(int n, int k) {
     return n + k - r;
 }
 
+int min(int a, int b) {
+    return a <= b ? a : b;
+}
+
 void* mapdisk(int dd) {
     struct stat st;
     if (fstat(dd, &st) < 0) {
@@ -72,7 +76,6 @@ int raid0_offset(int dnum) {
 /*    return 1;*/
 /*}*/
 
-/*void mirror_data(void *maindisk) {*/
 void mirror_data_raid1() {
     for (int i = 1; i < total_disks; i++) {
         memcpy(disk_ptrs[i], maindisk, disk_sizes[0]);
@@ -94,8 +97,6 @@ void memcpy_v(off_t dst, void *src, size_t size, int metadata) {
             }
             break;
         default:
-            /*mirror_data(disk_ptrs[0], dst, size);*/
-            /*mirror_data(disk_ptrs[0]);*/
             mirror_data_raid1();
             break;
     }
@@ -626,10 +627,8 @@ int read_blocks(int inum, const char *buffer, size_t size, off_t offset) {
 
     printf("[DEBUG] file size: %ld\n", inode.size);
     printf("[DEBUG] size: %ld\n", size);
-    if (size > (inode.size - offset)) {
-        size = inode.size - offset;
-        printf("[DEBUG] adjusted size: %ld\n", size);
-    }
+    size = min(size, inode.size - offset);
+    printf("[DEBUG] adjusted size: %ld\n", size);
 
     bytes_read = 0;
     printf("[DEBUG] offset: %ld\n", offset);
@@ -640,7 +639,9 @@ int read_blocks(int inum, const char *buffer, size_t size, off_t offset) {
             dnum = raid0_offset(blk);
             d_blocks_ptr = (off_t)disk_ptrs[raid0_disk(blk)] + sb.d_blocks_ptr;
             b_ptr = d_blocks_ptr + (dnum * BLOCK_SIZE);
-            to_read = ((size - bytes_read) / BLOCK_SIZE) >= 1 ? BLOCK_SIZE : (size - bytes_read);
+            /*to_read = ((size - bytes_read) / BLOCK_SIZE) >= 1 ? BLOCK_SIZE : (size - bytes_read);*/
+            to_read = min(BLOCK_SIZE - blk_offset, size - bytes_read);
+
             printf("[DEBUG] bytes to read: %ld\n", to_read);
             memcpy((void*)(buffer + bytes_read), (void*)(b_ptr + blk_offset), to_read);
             bytes_read += to_read;
@@ -685,7 +686,8 @@ int write_blocks(int inum, const char *buffer, size_t size, off_t offset) {
             dnum = raid0_offset(new_dnum);
             d_blocks_ptr = (off_t)disk_ptrs[raid0_disk(new_dnum)] + sb.d_blocks_ptr;
             b_ptr = d_blocks_ptr + (dnum * BLOCK_SIZE);
-            to_write = ((size - bytes_written) / BLOCK_SIZE) >= 1 ? BLOCK_SIZE : (size - bytes_written);
+            /*to_write = ((size - bytes_written) / BLOCK_SIZE) >= 1 ? BLOCK_SIZE : (size - bytes_written);*/
+            to_write = min(BLOCK_SIZE - blk_offset, size - bytes_written);
             printf("[DEBUG] bytes to write: %ld\n", to_write);
             memcpy_v(b_ptr + blk_offset, (void*)(buffer + bytes_written), to_write, 0);
             bytes_written += to_write;
@@ -976,14 +978,14 @@ static int wfs_write(const char *path, const char *buf, size_t size, off_t offse
 static int wfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi) {
     printf("\n******* inside readdir *******\n");
     int inum;
-    const char *parentpath;
+    /*const char *parentpath;*/
 
     if (path == NULL || strlen(path) == 0) {
         return -ENOENT;
     }
-    parentpath = getparentpath(path);
+    /*parentpath = getparentpath(path);*/
 
-    if ((inum = validatepath(parentpath)) == -1) {
+    if ((inum = validatepath(path)) == -1) {
         return -ENOENT;
     }
     if (read_dentries(inum, buf, filler) != 1) {
